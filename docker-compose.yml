@@ -1,0 +1,46 @@
+services:
+
+  # ── FastAPI backend ───────────────────────────────────────────────────────
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: verirag-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      CHECKPOINT_DB: /app/data/checkpoints.db
+    volumes:
+      - verirag_data:/app/data
+      - verirag_cache:/app/embedding_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Streamlit frontend ────────────────────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: verirag-frontend
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://fastapi:8000
+    restart: unless-stopped
+    depends_on:
+      fastapi:
+        condition: service_healthy
+
+# Named volumes — Docker manages these, no host files needed
+volumes:
+  verirag_data:
+  verirag_cache:
