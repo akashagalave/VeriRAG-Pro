@@ -1,0 +1,40 @@
+# requirements-backend.txt
+# Used by Dockerfile.backend ONLY — no eval/ML packages
+
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-dotenv>=1.2.2
+pydantic>=2.13.4
+python-multipart>=0.0.9
+slowapi>=0.1.9
+httpx>=0.27.0
+
+# LangChain
+langchain-core>=1.3.3
+langchain-openai>=1.2.1
+langchain-community>=0.4.1
+langchain-classic>=1.0.7
+langchain-qdrant>=1.1.0
+langchain-text-splitters>=1.1.2
+
+# LangGraph
+langgraph>=1.1.10
+langgraph-checkpoint-sqlite>=3.0.3
+langsmith>=0.8.3
+
+# Vector store
+qdrant-client>=1.17.1
+fastembed>=0.4.0
+
+# Document loaders
+pymupdf>=1.27.2.3
+pypdf>=6.10.2
+beautifulsoup4>=4.14.3
+lxml>=6.1.0
+arxiv>=3.0.0
+
+# Search
+tavily-python>=0.7.24
+
+# Production additions
+redis>=5.0.0

@@ -1,0 +1,12 @@
+# requirements-frontend.txt
+# Used by Dockerfile.frontend ONLY
+
+streamlit>=1.57.0
+httpx>=0.27.0
+python-dotenv>=1.2.2
+streamlit>=1.57.0
+httpx>=0.27.0
+python-dotenv>=1.2.2
+langchain-openai>=1.2.1
+langchain-core>=1.3.3
+langchain-classic>=1.0.7
