@@ -4,14 +4,17 @@ kind: Service
 metadata:
   name: verirag-fastapi-service
   namespace: verirag
+  labels:
+    app: verirag-backend
 spec:
   selector:
     app: verirag-backend
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 8000
       targetPort: 8000
-  type: ClusterIP
+  type: LoadBalancer
 
 ---
 # ── Streamlit frontend service ────────────────────────────────────────────────
@@ -20,11 +23,14 @@ kind: Service
 metadata:
   name: verirag-streamlit-service
   namespace: verirag
+  labels:
+    app: verirag-frontend
 spec:
   selector:
     app: verirag-frontend
   ports:
-    - protocol: TCP
+    - name: http
+      protocol: TCP
       port: 8501
       targetPort: 8501
-  type: ClusterIP
+  type: LoadBalancer
