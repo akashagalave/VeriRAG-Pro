@@ -15,3 +15,7 @@ embedding_cache/
 eval_results.json
 eval_summary.md
 iam-policy.json
+__pycache__/
+*.pyc
+*.pyo
+ak.md
