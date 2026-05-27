@@ -1,23 +1,3 @@
-"""
-backend/api.py
---------------
-FastAPI backend for VeriRAG — Production Edition.
-
-Routes
-~~~~~~
-  GET  /health                             — liveness probe
-  GET  /ready                              — readiness probe
-  POST /sessions/{session_id}/ingest       — load docs (with Redis dedup)
-  GET  /sessions/{session_id}/info         — collection stats
-  GET  /sessions/{session_id}/history      — reload past chat messages
-  POST /sessions/{session_id}/query        — RAG pipeline + security layers
-
-Production additions:
-  Security Layer   — Input guardrail (Layer 1) before graph; Output validator
-                     (Layer 3) before streaming done event.
-  Redis Dedup      — SHA-256 document hash check before every ingest.
-  Model Router     — Circuit breaker status exposed in /health.
-"""
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -52,12 +32,11 @@ from backend.vector_store import add_paper, collection_stats, get_collection_nam
 
 logger = logging.getLogger(__name__)
 
-# ── Rate limiter ──────────────────────────────────────────────────────────────
+# ── Rate limiter 
 
 _rate = os.getenv("RATE_LIMIT_PER_MINUTE", "30")
 limiter = Limiter(key_func=get_remote_address)
 
-# ── LangGraph singleton ───────────────────────────────────────────────────────
 
 _graph = None
 
@@ -81,7 +60,6 @@ def get_graph():
     return _graph
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="VeriRAG API",
@@ -110,7 +88,6 @@ app.add_middleware(
 )
 
 
-# ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
     question: str = Field(
@@ -142,7 +119,6 @@ class SessionInfoResponse(BaseModel):
     paper_titles: list[str]
 
 
-# ── Health / readiness ────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"], summary="Liveness probe")
 async def health():
@@ -161,7 +137,6 @@ async def ready():
     return {"status": "ready"}
 
 
-# ── Session info ──────────────────────────────────────────────────────────────
 
 @app.get(
     "/sessions/{session_id}/info",
@@ -175,7 +150,6 @@ async def session_info(session_id: str):
     return SessionInfoResponse(session_id=session_id, paper_titles=titles, **stats)
 
 
-# ── Session history ───────────────────────────────────────────────────────────
 
 @app.get(
     "/sessions/{session_id}/history",
@@ -210,7 +184,6 @@ async def session_history(session_id: str):
     return chats
 
 
-# ── Ingest ────────────────────────────────────────────────────────────────────
 
 @app.post(
     "/sessions/{session_id}/ingest",
@@ -243,7 +216,7 @@ async def ingest(
             raw_bytes = await file.read()
             doc_hash = compute_document_hash(raw_bytes)
 
-            # ── Redis deduplication check ─────────────────────────────────────
+            # ── Redis deduplication check
             if is_document_indexed(doc_hash, session_id):
                 return IngestResponse(
                     session_id=session_id,
@@ -294,8 +267,6 @@ async def ingest(
         raise HTTPException(500, f"Ingest failed: {exc}")
 
 
-# ── Query (streaming) ─────────────────────────────────────────────────────────
-
 @app.post(
     "/sessions/{session_id}/query",
     tags=["query"],
@@ -321,7 +292,7 @@ async def query_session(
 ):
     graph = get_graph()
 
-    # ── Layer 1: Input Guardrail (before graph, fail-closed) ──────────────────
+    # ── Layer 1: Input Guardrail (before graph, fail-closed)
     guardrail = check_input(body.question)
     if not guardrail.safe:
         raise HTTPException(
@@ -374,7 +345,7 @@ async def query_session(
             if not full_answer:
                 full_answer = final_values.get("answer") or ""
 
-            # ── Layer 3: Output Validator (before done event) ─────────────────
+            # ── Layer 3: Output Validator (before done event)
             validation = validate_output(full_answer)
             if not validation.safe:
                 logger.warning(

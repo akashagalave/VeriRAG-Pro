@@ -1,29 +1,3 @@
-"""
-backend/security.py
--------------------
-Multi-layer GenAI security for VeriRAG.
-
-Three independent layers — each can fail without breaking the others:
-
-  Layer 1 — Input Guardrail
-    Rule-based prompt injection detection (regex, microseconds, no LLM call).
-    Blocks requests with FAIL CLOSED: returns 400 before the graph runs.
-
-  Layer 2 — Context Sanitizer
-    Strips hidden instructions from retrieved web content (indirect injection /
-    retrieval poisoning). Applied to every retrieved chunk before LLM sees it.
-    FAIL OPEN: logs and continues if sanitizer errors.
-
-  Layer 3 — Output Validator
-    PII redaction on LLM output before sending to user.
-    Uses Microsoft Presidio if installed; falls back to regex patterns.
-    FAIL OPEN: returns original output with a warning if validator errors.
-
-Design principles:
-  - Zero external API calls (all local)
-  - Presidio is optional (graceful import)
-  - Every function returns a typed dataclass — never raises by default
-"""
 
 import logging
 import re
@@ -32,9 +6,9 @@ from dataclasses import dataclass, field
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Injection patterns — Layer 1
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 _INJECTION_PATTERNS: list[str] = [
     # ignore-previous-instructions family
@@ -72,9 +46,9 @@ _COMPILED_INJECTION = [
     for p in _INJECTION_PATTERNS
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Hidden instruction patterns in retrieved web content — Layer 2
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 _HIDDEN_PATTERNS: list[str] = [
     r"ignore\s+(all\s+)?previous",
@@ -94,9 +68,9 @@ _COMPILED_HIDDEN = [
     for p in _HIDDEN_PATTERNS
 ]
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # PII regex fallback patterns — Layer 3
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 _PII_PATTERNS: dict[str, re.Pattern] = {
     "EMAIL":       re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
@@ -108,9 +82,6 @@ _PII_PATTERNS: dict[str, re.Pattern] = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Result dataclasses
-# ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class GuardrailResult:
@@ -133,9 +104,9 @@ class ValidationResult:
     redacted_output: str = ""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+
 # Layer 1 — Input Guardrail
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 def check_input(user_input: str) -> GuardrailResult:
     """
@@ -176,9 +147,8 @@ def check_input(user_input: str) -> GuardrailResult:
     return GuardrailResult(safe=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Layer 2 — Context Sanitizer
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 def sanitize_context(raw_text: str) -> SanitizedContext:
     """
@@ -218,9 +188,8 @@ def sanitize_context(raw_text: str) -> SanitizedContext:
         return SanitizedContext(content=raw_text, redacted_count=0, was_clean=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Layer 3 — Output Validator (PII Redaction)
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 def _presidio_redact(text: str) -> tuple[str, list[str]]:
     """

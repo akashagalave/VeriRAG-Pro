@@ -1,30 +1,3 @@
-"""
-evaluate.py
------------
-DeepEval evaluation pipeline with regression detection.
-
-Two modes:
-  1. Full evaluation (default):
-     - Loads or generates golden Q&A pairs from the PDF
-     - Runs all test cases through the RAG pipeline
-     - Saves scores to eval_results.json
-     - Compares against baseline (eval_baseline.json)
-     - Exits with code 1 if any metric drops below threshold
-     - Updates baseline on success
-
-  2. CI/CD gate (--ci flag):
-     - Same as above but writes a GitHub Actions summary
-     - Designed to run as a blocking job before EKS deployment
-
-Usage:
-  python evaluate.py              # full evaluation, update baseline if pass
-  python evaluate.py --ci         # CI mode — exit 1 on regression
-  python evaluate.py --generate   # regenerate goldens.json from PDF
-
-Exit codes:
-  0 — all metrics at or above threshold (safe to deploy)
-  1 — regression detected or evaluation error (block deployment)
-"""
 
 import argparse
 import json
@@ -313,11 +286,11 @@ def main() -> int:
     )
     logger.info("Full results saved → %s", RESULTS_FILE)
 
-    # Extract aggregate scores and detect regressions
+  
     current_scores = extract_scores(results)
     failures = detect_regression(current_scores, baseline_scores)
 
-    # Write markdown summary
+
     write_summary(current_scores, baseline_scores, failures, ci_mode=args.ci)
 
     if failures:
@@ -326,7 +299,7 @@ def main() -> int:
             logger.error("  %s", f)
         return 1
 
-    # All passed — update baseline
+  
     BASELINE_FILE.write_text(
         json.dumps(current_scores, indent=2, ensure_ascii=False), encoding="utf-8"
     )

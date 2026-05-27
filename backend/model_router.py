@@ -1,36 +1,4 @@
-"""
-backend/model_router.py
------------------------
-Provider-agnostic LLM router with circuit breakers, exponential backoff
-retry, and multi-provider fallback for VeriRAG.
-
-Problem this solves:
-  Current system binds to a single provider (OpenAI gpt-4o-mini).
-  One rate-limit spike, one provider outage, one timeout → entire system fails.
-
-Solution:
-  Fallback chain: GPT-4o-mini → Claude Haiku → Gemini Flash
-  Circuit breakers prevent hammering a failing provider.
-  Retry with exponential backoff handles transient errors.
-
-Circuit Breaker States:
-  CLOSED    → healthy, requests go through normally
-  OPEN      → N consecutive failures → block this provider, use next
-  HALF-OPEN → after recovery_timeout seconds → send one probe request
-               if probe succeeds → CLOSED
-               if probe fails → OPEN again
-
-Configuration (env vars):
-  OPENAI_API_KEY     → enables GPT-4o-mini (primary)
-  ANTHROPIC_API_KEY  → enables Claude Haiku (fallback 1)
-  GOOGLE_API_KEY     → enables Gemini Flash (fallback 2)
-  CB_FAILURE_THRESHOLD  default=3  failures before OPEN
-  CB_RECOVERY_TIMEOUT   default=60 seconds before HALF-OPEN probe
-
-Fail behaviour:
-  If ALL providers fail → raises RuntimeError with last error.
-  The caller (graph node) catches this and returns a graceful error answer.
-"""
+""
 
 import logging
 import os
@@ -41,21 +9,17 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Configuration ─────────────────────────────────────────────────────────────
 
 _CB_FAILURE_THRESHOLD = int(os.getenv("CB_FAILURE_THRESHOLD", "3"))
 _CB_RECOVERY_TIMEOUT  = float(os.getenv("CB_RECOVERY_TIMEOUT", "60"))
 _MAX_RETRIES          = int(os.getenv("LLM_MAX_RETRIES", "2"))
 _BASE_DELAY           = float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
 
-# Error substrings that indicate a transient / retryable error
 _TRANSIENT_KEYWORDS = (
     "timeout", "timed out", "rate limit", "429", "503", "502",
     "connection", "overloaded", "server error", "try again",
 )
 
-
-# ── Circuit Breaker ───────────────────────────────────────────────────────────
 
 class _CircuitState(Enum):
     CLOSED    = "closed"
@@ -78,7 +42,6 @@ class CircuitBreaker:
     _failure_count:     int           = field(default=0,   init=False, repr=False)
     _last_failure_time: float         = field(default=0.0, init=False, repr=False)
 
-    # ── State queries ─────────────────────────────────────────────────────────
 
     @property
     def state_name(self) -> str:
@@ -101,7 +64,6 @@ class CircuitBreaker:
             return True        # still open, block
         return False
 
-    # ── State transitions ─────────────────────────────────────────────────────
 
     def record_success(self) -> None:
         if self._state == _CircuitState.HALF_OPEN:
@@ -109,7 +71,7 @@ class CircuitBreaker:
             self._state = _CircuitState.CLOSED
             self._failure_count = 0
         elif self._state == _CircuitState.CLOSED:
-            # Decay failure count on success (makes circuit more forgiving)
+            
             self._failure_count = max(0, self._failure_count - 1)
 
     def record_failure(self) -> None:
@@ -129,7 +91,6 @@ class CircuitBreaker:
             self._state = _CircuitState.OPEN
 
 
-# ── Provider definition ───────────────────────────────────────────────────────
 
 @dataclass
 class _Provider:
@@ -138,7 +99,6 @@ class _Provider:
     circuit_breaker: CircuitBreaker
 
 
-# ── Provider registry (built once at import time) ─────────────────────────────
 
 def _build_providers() -> list[_Provider]:
     """
@@ -147,7 +107,6 @@ def _build_providers() -> list[_Provider]:
     """
     providers: list[_Provider] = []
 
-    # ── Primary: OpenAI GPT-4o-mini ───────────────────────────────────────────
     if os.getenv("OPENAI_API_KEY"):
         try:
             from langchain_openai import ChatOpenAI
@@ -160,7 +119,6 @@ def _build_providers() -> list[_Provider]:
         except Exception as exc:
             logger.warning("OpenAI provider init failed: %s", exc)
 
-    # ── Fallback 1: Anthropic Claude Haiku ───────────────────────────────────
     if os.getenv("ANTHROPIC_API_KEY"):
         try:
             from langchain_anthropic import ChatAnthropic  # type: ignore
@@ -179,7 +137,7 @@ def _build_providers() -> list[_Provider]:
         except Exception as exc:
             logger.warning("Anthropic provider init failed: %s", exc)
 
-    # ── Fallback 2: Google Gemini Flash ───────────────────────────────────────
+    # ── Fallback 2: Google Gemini Flash 
     if os.getenv("GOOGLE_API_KEY"):
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
@@ -217,8 +175,6 @@ def _get_providers() -> list[_Provider]:
     return _providers
 
 
-# ── Retry helper ──────────────────────────────────────────────────────────────
-
 def _is_transient(exc: Exception) -> bool:
     """True for errors worth retrying (rate limits, timeouts, 5xx)."""
     msg = str(exc).lower()
@@ -248,8 +204,6 @@ def _invoke_with_retry(bound_llm: Any, messages: list, max_retries: int) -> Any:
 
     raise last_exc
 
-
-# ── Public API ────────────────────────────────────────────────────────────────
 
 def invoke_with_fallback(
     messages: list,

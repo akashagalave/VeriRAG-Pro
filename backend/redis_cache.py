@@ -1,39 +1,3 @@
-"""
-backend/redis_cache.py
-----------------------
-Redis-backed distributed document deduplication for VeriRAG.
-
-Problem this solves:
-  In EKS with 2-5 FastAPI pods, LocalFileStore is per-pod:
-    Pod-1 caches chunk embeddings → Pod-1 filesystem
-    Pod-2 knows nothing → re-embeds same chunks → wasted OpenAI cost
-    Pod restart → all cached embeddings lost
-
-Solution:
-  Before ingesting a document, compute SHA-256 of its raw bytes.
-  Look up the hash in Redis (shared across all pods and restarts).
-  If found → document already indexed for this session → skip pipeline.
-  If not  → run chunk/embed/store pipeline → record hash in Redis.
-
-Redis key schema:
-  verirag:doc:{session_id}:{sha256_hex}  →  JSON payload
-    {
-      "doc_hash": "abc123...",
-      "session_id": "uuid",
-      "collection_name": "papeer_uuid",
-      "chunk_count": 42,
-      "embedding_version": "text-embedding-3-small-v1",
-      "indexed_at": "2026-05-13T12:00:00Z"
-    }
-
-TTL: 30 days (configurable via REDIS_DOC_TTL_DAYS env var)
-
-Fail-open design:
-  If Redis is unavailable (no REDIS_URL, connection timeout, any error),
-  is_document_indexed() returns False (re-index to be safe).
-  mark_document_indexed() logs a warning and silently continues.
-  The rest of the ingestion pipeline is NEVER blocked by Redis.
-"""
 
 import hashlib
 import json
@@ -44,14 +8,14 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+
 
 EMBEDDING_VERSION = "text-embedding-3-small-v1"
 KEY_PREFIX = "verirag:doc"
 _TTL_DAYS = int(os.getenv("REDIS_DOC_TTL_DAYS", "30"))
 TTL_SECONDS = _TTL_DAYS * 24 * 3600
 
-# ── Singleton client ──────────────────────────────────────────────────────────
+
 
 _client = None
 _client_initialized = False

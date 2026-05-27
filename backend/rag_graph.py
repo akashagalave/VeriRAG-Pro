@@ -1,4 +1,4 @@
-# ── load env FIRST — LangSmith reads os.environ at import time ────────────────
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -26,14 +26,13 @@ from backend.models import ClaimVerificationResult, RelevancyDecision, RouterDec
 from backend.security import sanitize_context
 from backend.vector_store import search as vs_search
 
-# ── LangSmith project metadata ────────────────────────────────────────────────
 _LS_PROJECT = os.getenv("LANGSMITH_PROJECT", "LangGraph-Database-Backend")
 
 # ── Primary LLM (from model router) ──────────────────────────────────────────
 llm = get_primary_llm()
 
 
-# ── State ─────────────────────────────────────────────────────────────────────
+
 
 class RAGState(MessagesState):
     session_id: str
@@ -48,8 +47,6 @@ class RAGState(MessagesState):
     is_relevant: bool | None
     rewrite_count: int
 
-
-# ── Router ────────────────────────────────────────────────────────────────────
 
 ROUTER_PROMPT = ChatPromptTemplate.from_messages([
     (
@@ -91,7 +88,6 @@ def router_node(state: RAGState) -> dict:
     return {"route": decision.route}
 
 
-# ── Tool schemas ──────────────────────────────────────────────────────────────
 
 class RetrieverInput(BaseModel):
     query: str = Field(description="Semantic query to search research paper chunks")
@@ -103,7 +99,6 @@ class WebSearchInput(BaseModel):
     max_results: int = Field(default=3, ge=1, le=10, description="Number of web results to return")
 
 
-# ── Tools ─────────────────────────────────────────────────────────────────────
 
 @tool(args_schema=RetrieverInput)
 def retrieve_from_vectorstore(
@@ -468,28 +463,7 @@ def after_relevancy_routing(state: RAGState) -> str:
 
 
 def build_graph(db_path: str = "checkpoints.db"):
-    """
-    Compile the RAG LangGraph with SQLite checkpointing.
 
-    Graph topology
-    ──────────────
-    router
-      ├─► agent_node ──► retrieval (tool) ──► agent_node (loop)
-      │       └─► relevancy_check ──► query_rewrite ──► agent_node
-      │                           └─► generate_answer
-      ├─► verify_claim ──► generate_answer
-      └─► generate_answer
-
-    Security integration:
-      - Input guardrail runs in api.py BEFORE graph (fast, fail-closed)
-      - Context sanitization runs inside retrieval tools (per-chunk)
-      - Output validation runs in api.py AFTER graph (before streaming done event)
-
-    Model router integration:
-      - All llm.invoke() calls use invoke_with_fallback()
-      - Circuit breakers protect against provider outages
-      - Fallback chain: GPT-4o-mini → Claude Haiku → Gemini Flash
-    """
     conn = sqlite3.connect(db_path, check_same_thread=False)
     checkpointer = SqliteSaver(conn)
 

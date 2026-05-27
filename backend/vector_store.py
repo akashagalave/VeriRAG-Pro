@@ -28,17 +28,6 @@ SPARSE_VECTOR_NAME = "sparse"
 
 base_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-# ── Embedding cache — Redis if available, LocalFileStore fallback ─────────────
-#
-# With REDIS_URL set (EKS + Redis pod):
-#   - All pods share one cache
-#   - Same text chunk never embedded twice across any pod
-#   - Survives pod restarts (as long as Redis pod is alive)
-#
-# Without REDIS_URL (local dev):
-#   - Falls back to LocalFileStore (per-process cache)
-#   - Still avoids duplicate calls within same process session
-#
 REDIS_URL = os.getenv("REDIS_URL", "")
 
 if REDIS_URL:
