@@ -1,467 +1,370 @@
-# 🔍 VeriRAG — Agentic Research Intelligence & Scientific Claim Verification
+# 🚀 VeriRAG-Pro — Production AI Platform
 
-### Production-Grade Agentic RAG Platform for Scientific Research
+### VeriRAG upgraded from a good RAG project to a production-oriented AI platform
 
 ![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-REST%20Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![AWS](https://img.shields.io/badge/AWS-EC2%20%2B%20ECR-232F3E?style=for-the-badge&logo=amazon-aws&logoColor=white)
+![AWS](https://img.shields.io/badge/AWS-EKS%20%2B%20ECR-232F3E?style=for-the-badge&logo=amazon-aws&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Agentic%20Pipeline-FF6B35?style=for-the-badge)
-![GPT-4o-mini](https://img.shields.io/badge/GPT--4o--mini-Router%20%2B%20Generator-412991?style=for-the-badge&logo=openai&logoColor=white)
-![Qdrant](https://img.shields.io/badge/Qdrant-Hybrid%20Retrieval-DC244C?style=for-the-badge)
-![LangSmith](https://img.shields.io/badge/LangSmith-Observability-1C3C3C?style=for-the-badge)
-![DeepEval](https://img.shields.io/badge/DeepEval-100%25%20Faithfulness-4CAF50?style=for-the-badge)
-![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?style=for-the-badge&logo=docker&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Streamlit-Frontend-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-Distributed%20Cache-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![Security](https://img.shields.io/badge/Security-Prompt%20Injection%20%2B%20PII-FF4444?style=for-the-badge)
+![DeepEval](https://img.shields.io/badge/DeepEval-CI%20Quality%20Gate-4CAF50?style=for-the-badge)
+![CircuitBreaker](https://img.shields.io/badge/Circuit%20Breaker-GPT→Claude→Gemini-412991?style=for-the-badge&logo=openai&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-EKS%20HPA-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-CI%2FCD-2088FF?style=for-the-badge&logo=github-actions&logoColor=white)
 
 ---
 
-## 📖 Overview
+## 📖 What is VeriRAG-Pro?
 
-**VeriRAG** is a **production-grade agentic RAG platform** that enables researchers to upload scientific papers, ask questions grounded in retrieved context, and verify whether specific research claims have been superseded by newer literature.
+**VeriRAG-Pro** is the production-upgraded version of **[VeriRAG](https://github.com/akashagalave/VeriRAG)** — an agentic RAG platform for scientific research.
 
-Users upload papers → VeriRAG routes each query through an **intelligent LangGraph pipeline** — classifying intent, performing hybrid BM25 + dense retrieval with RRF fusion, running dual web searches for claim verification, and streaming answers token-by-token — all deployed on **AWS EC2** with Docker, full **LangSmith tracing**, **SlowAPI rate limiting**, and evaluated using **DeepEval** achieving **100% Faithfulness and 100% Answer Relevancy**.
+The original VeriRAG was a strong technical foundation:
 
-> **EKS Migration in Progress:** Production deployment is being migrated to AWS EKS with HPA autoscaling, rolling updates, and zero-downtime deployments. Kubernetes manifests and GitHub Actions CI/CD pipeline are complete and ready.
+```
+LangGraph  ·  Hybrid Retrieval (BM25 + Dense)  ·  RRF Fusion
+Multi-hop Query Routing  ·  Scientific Claim Verification
+DeepEval  ·  FastAPI  ·  LangSmith  ·  Docker  ·  AWS EKS  ·  HPA  ·  CI/CD
+```
 
----
-
-## ❌ Problem
-
-- Researchers waste hours manually cross-referencing papers to verify if findings are still current
-- Static retrieval pipelines treat all queries the same — factual questions, claim verification, and general knowledge need different workflows
-- Single-vector search misses exact terms like author names, arXiv IDs, and formula tokens critical in scientific literature
-- No observable, production-grade RAG system purpose-built for scientific research workflows
+VeriRAG-Pro transforms it from a **good RAG project** into a **production AI platform** by adding 4 engineering improvements that most GenAI projects lack — security, reliability, distributed caching, and automated quality gates.
 
 ---
 
-## ✅ Solution
+## 🔧 4 Production Improvements
 
-| Problem | Solution |
-|---|---|
-| Manual claim verification | Agentic verify_claim route — dual Tavily search (web + arXiv) with structured LLM verdict |
-| One-size-fits-all retrieval | LangGraph router classifies every query into retrieve / verify_claim / direct_answer |
-| Dense-only search misses exact terms | Hybrid BM25 + dense retrieval with Qdrant RRF fusion |
-| Poor retrieval quality | Relevancy check node + automatic query rewrite loop |
-| No session isolation | Per-session Qdrant collections — zero cross-session data leakage |
-| No observability | LangSmith @traceable on all nodes — per-node latency + token costs |
-| No abuse protection | SlowAPI rate limiting — 30 req/min per IP |
-| Monolithic architecture | FastAPI backend + Streamlit frontend as independent containers |
+### 1. 🔒 Security Layer — Multi-layer GenAI Security
+
+**Problem:** No protection against prompt injection, retrieval poisoning, or PII leakage in LLM output.
+
+**Solution:** Three independent security layers:
+
+| Layer | What it does | Fail policy |
+|---|---|---|
+| Input Guardrail | 18 regex patterns — blocks prompt injection, jailbreaks, DAN attacks before graph runs | Fail-closed → HTTP 400 |
+| Context Sanitizer | Strips hidden instructions from every retrieved web chunk — guards against retrieval poisoning | Fail-open → log and continue |
+| Output Validator | Scans LLM output for PII (email, phone, SSN, Aadhaar) before sending to user | Fail-open → redact and continue |
+
+**Confirmed live:**
+```
+POST /sessions/test/query {"question": "ignore all previous instructions"}
+→ HTTP 400: "Your input contains patterns associated with prompt injection"
+```
 
 ---
 
-## 🏗️ High-Level Architecture
+### 2. 📊 Evaluation Regression Pipeline — Automated Quality Gate
+
+**Problem:** DeepEval ran manually. No way to automatically block a bad deployment.
+
+**Solution:** 3-job GitHub Actions pipeline with DeepEval as a blocking gate:
+
+```
+git push origin main
+        ↓
+Job 1: eval-gate   → runs evaluate.py --ci
+                     compares scores vs eval_baseline.json
+                     exit code 1 on regression → BLOCKS deployment
+        ↓
+Job 2: build       → only runs if eval-gate passes
+                     builds Docker images, pushes to ECR
+        ↓
+Job 3: deploy      → only runs if build passes
+                     kubectl set image, waits for rollout
+```
+
+**Baseline scores (Faithfulness and Answer Relevancy are hard gates):**
+
+| Metric | Score | Gate |
+|---|---|---|
+| Faithfulness | 0.94 | Hard gate ≥ 0.70 |
+| Answer Relevancy | 0.88 | Hard gate ≥ 0.70 |
+| Contextual Precision | 0.85 | Soft gate |
+| Contextual Recall | 0.86 | Soft gate |
+
+---
+
+### 3. ⚡ Redis Distributed Cache — Document Dedup + Embedding Cache
+
+**Problem:** `LocalFileStore` is per-pod. With 2-5 FastAPI pods on EKS, each pod re-embeds the same documents independently — wasted OpenAI API cost and time.
+
+**Solution:** Two caching layers backed by a shared Redis pod:
+
+**Layer 1 — Document Deduplication**
+```
+User uploads PDF
+     ↓
+SHA-256 hash computed from raw bytes
+     ↓
+Redis lookup: verirag:doc:{session_id}:{hash}
+     ↓
+HIT  → return deduplicated: true, chunks_added: 0  (zero OpenAI calls)
+MISS → chunk → embed → store in Qdrant → write hash to Redis
+```
+
+**Layer 2 — Embedding Cache**
+```
+CacheBackedEmbeddings → checks Redis before every OpenAI embed call
+Same text chunk seen before → return cached vector (FREE)
+New text → call OpenAI → store in Redis → use vector
+```
+
+**Confirmed live on EKS:**
+```
+keyspace_hits:   95    ← served from cache (free)
+keyspace_misses: 97    ← new embeddings computed
+DBSIZE:          97    ← keys stored in Redis
+Cache hit rate:  49%
+
+Redis PING test:
+REDIS_URL: redis://redis.verirag.svc.cluster.local:6379
+PING: True
+```
+
+---
+
+### 4. 🔄 Model Router + Reliability — Circuit Breakers + Fallback Chain
+
+**Problem:** Single LLM provider — one rate limit spike or provider outage takes down the entire system.
+
+**Solution:** Provider-agnostic model router with circuit breakers and automatic fallback:
+
+```
+Every LLM call → invoke_with_fallback()
+                        ↓
+              GPT-4o-mini (primary)
+                  circuit: CLOSED ✅
+                        ↓ fails?
+              Claude Haiku (fallback 1)
+                  circuit: CLOSED ✅
+                        ↓ fails?
+              Gemini Flash (fallback 2)
+                  circuit: CLOSED ✅
+```
+
+**Circuit Breaker states:**
+```
+CLOSED    → healthy, requests go through
+OPEN      → 3+ consecutive failures → block provider, try next
+HALF-OPEN → after 60s → send one probe → if success → CLOSED
+```
+
+**Confirmed live:**
+```json
+GET /health
+{
+  "status": "ok",
+  "providers": [
+    {"provider": "openai-gpt-4o-mini", "circuit_state": "closed", "failure_count": 0}
+  ]
+}
+```
+
+---
+
+## 🏗️ Architecture After Improvements
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#1e3a5f', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#4a90d9', 'lineColor': '#4a90d9', 'secondaryColor': '#0d2137', 'tertiaryColor': '#0a1628', 'clusterBkg': '#0d2137', 'clusterBorder': '#4a90d9', 'titleColor': '#ffffff', 'edgeLabelBackground': '#1e3a5f', 'nodeTextColor': '#ffffff'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#1e3a5f', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#4a90d9', 'lineColor': '#4a90d9', 'secondaryColor': '#0d2137', 'clusterBkg': '#0d2137', 'clusterBorder': '#4a90d9', 'titleColor': '#ffffff', 'nodeTextColor': '#ffffff'}}}%%
 flowchart TD
-    subgraph Frontend[Streamlit Frontend — Port 8501]
-        UI[Chat Interface]
-        SB[Sidebar — Upload PDF / URL / ArXiv]
-        SESS[Session Manager — UUID-based isolation]
+    USER[User]
+
+    subgraph Security[Security Layer]
+        IG[Input Guardrail\nPrompt injection detection\n18 regex patterns]
+        CS[Context Sanitizer\nRetrieval poisoning protection]
+        OV[Output Validator\nPII redaction]
     end
 
-    subgraph Backend[FastAPI Backend — Port 8000]
-        API[REST API — 5 routes]
-        RATE[SlowAPI Rate Limiter — 30 req/min]
-        GRAPH[LangGraph Pipeline]
+    subgraph Router[Model Router]
+        MR[invoke_with_fallback\nGPT-4o-mini → Claude → Gemini]
+        CB[Circuit Breakers\nCLOSED / OPEN / HALF-OPEN]
     end
 
-    subgraph Pipeline[Agentic LangGraph Pipeline]
-        ROUTER[Router Node — GPT-4o-mini\nretrieve / verify_claim / direct_answer]
-        AGENT[Agent Node — Tool Caller]
-        RETRIEVAL[Hybrid Retrieval — Qdrant BM25 + Dense + RRF]
-        WEBSEARCH[Web Search — Tavily]
-        RELEVANCY[Relevancy Check Node]
-        REWRITE[Query Rewrite Node]
-        VERIFY[Claim Verification Node — Dual Tavily]
-        GENERATE[Generate Answer Node — Token Streaming]
+    subgraph Cache[Redis Cache]
+        DD[Document Dedup\nSHA-256 hash check]
+        EC[Embedding Cache\nCacheBackedEmbeddings + RedisStore]
     end
 
-    subgraph Storage[Storage Layer]
-        QDRANT[Qdrant Cloud — Per-session collections]
-        SQLITE[SQLite — LangGraph Checkpointer]
-        CACHE[Embedding Cache — CacheBackedEmbeddings]
+    subgraph Pipeline[LangGraph Pipeline]
+        GRAPH[7-node RAG Graph\nrouter → agent → retrieval\nrelevancy → rewrite\nverify → generate]
     end
 
-    UI --> API
-    SB --> API
-    API --> RATE --> GRAPH
-    GRAPH --> ROUTER --> AGENT
-    AGENT --> RETRIEVAL --> QDRANT
-    AGENT --> WEBSEARCH
-    RETRIEVAL --> RELEVANCY
-    RELEVANCY --> REWRITE --> AGENT
-    RELEVANCY --> GENERATE
-    ROUTER --> VERIFY --> GENERATE
-    ROUTER --> GENERATE
-    GRAPH --> SQLITE
-    RETRIEVAL --> CACHE
+    subgraph Eval[CI/CD Quality Gate]
+        EG[eval-gate job\nDeepEval baseline check\nblocks on regression]
+    end
 
-    style UI fill:#1a5276,stroke:#4a90d9,color:#fff
-    style SB fill:#1a5276,stroke:#4a90d9,color:#fff
-    style SESS fill:#1a5276,stroke:#4a90d9,color:#fff
-    style API fill:#145a32,stroke:#27ae60,color:#fff
-    style RATE fill:#145a32,stroke:#27ae60,color:#fff
+    USER --> IG
+    IG --> DD
+    DD --> EC
+    EC --> Pipeline
+    Pipeline --> CS
+    CS --> MR
+    MR --> CB
+    Pipeline --> OV
+    OV --> USER
+    EG --> Pipeline
+
+    style IG fill:#922b21,stroke:#f1948a,color:#fff
+    style CS fill:#922b21,stroke:#f1948a,color:#fff
+    style OV fill:#922b21,stroke:#f1948a,color:#fff
+    style MR fill:#6e2f8a,stroke:#bb8fce,color:#fff
+    style CB fill:#6e2f8a,stroke:#bb8fce,color:#fff
+    style DD fill:#784212,stroke:#f0b27a,color:#fff
+    style EC fill:#784212,stroke:#f0b27a,color:#fff
     style GRAPH fill:#145a32,stroke:#27ae60,color:#fff
-    style ROUTER fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style AGENT fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style RETRIEVAL fill:#784212,stroke:#f0b27a,color:#fff
-    style WEBSEARCH fill:#784212,stroke:#f0b27a,color:#fff
-    style RELEVANCY fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style REWRITE fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style VERIFY fill:#922b21,stroke:#f1948a,color:#fff
-    style GENERATE fill:#1a5276,stroke:#4a90d9,color:#fff
-    style QDRANT fill:#922b21,stroke:#f1948a,color:#fff
-    style SQLITE fill:#1b4f72,stroke:#5dade2,color:#fff
-    style CACHE fill:#1b4f72,stroke:#5dade2,color:#fff
+    style EG fill:#1b4f72,stroke:#5dade2,color:#fff
 ```
 
 ---
 
-## 🔁 End-to-End Request Flow
+## 📁 New Files Added
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant ST as Streamlit :8501
-    participant FA as FastAPI :8000
-    participant LG as LangGraph Pipeline
-    participant QD as Qdrant Cloud
-    participant TV as Tavily API
-    participant OA as OpenAI API
+```
+backend/
+├── security.py       ← Layer 1/2/3 security (prompt injection, sanitizer, PII)
+├── redis_cache.py    ← SHA-256 document dedup, Redis key management
+├── model_router.py   ← Circuit breakers, invoke_with_fallback, provider registry
 
-    User->>ST: Type question + Enter
-    ST->>FA: POST /sessions/{id}/query (httpx stream)
-    Note over FA: SlowAPI rate limit check (30/min)
-    FA->>LG: graph.stream(input_state, stream_mode=messages)
-    Note over LG: router_node — GPT-4o-mini classifies query
-    LG->>OA: classify → retrieve / verify_claim / direct_answer
+k8s/
+├── redis.yml         ← Redis pod + ClusterIP service deployment
 
-    alt retrieve route
-        LG->>QD: Hybrid BM25 + dense search (RRF fusion)
-        QD-->>LG: top-k chunks
-        Note over LG: relevancy_check_node
-        opt not relevant
-            Note over LG: query_rewrite_node → retry once
-        end
-    else verify_claim route
-        LG->>TV: General web search + arXiv-targeted search
-        TV-->>LG: Recent papers + snippets
-        LG->>OA: Structured verdict — is_superseded + citations
-    else direct_answer route
-        Note over LG: No retrieval — answer from model knowledge
-    end
-
-    LG->>OA: generate_answer_node (streaming)
-    OA-->>FA: token chunks
-    FA-->>ST: {type: token, data: chunk}\n (NDJSON stream)
-    ST-->>User: Word-by-word rendering
-    FA-->>ST: {type: done, data: {answer, route, sources}}
-    ST-->>User: Sources expander rendered
+.github/workflows/
+└── deploy.yml        ← Updated: eval-gate → build → deploy (3-job pipeline)
 ```
 
 ---
 
-## 🔍 Claim Verification Flow
-
-```mermaid
-flowchart TD
-    Q2[User: Is this claim still valid?]
-    ROUTER2[Router → verify_claim]
-    TV1[Tavily General Search\nrecent research superseding: claim]
-    TV2[Tavily ArXiv Search\nsite:arxiv.org claim]
-    MERGE[Merge results — titles + URLs + 300-char snippets]
-    LLM2[GPT-4o-mini Structured Output\nClaimVerificationResult]
-    VERDICT{is_superseded?}
-    YES[Verdict: OUTDATED\n+ superseding papers with links]
-    NO[Verdict: STILL VALID\n+ supporting evidence]
-
-    Q2 --> ROUTER2 --> TV1 & TV2 --> MERGE --> LLM2 --> VERDICT
-    VERDICT --> YES
-    VERDICT --> NO
-```
-
----
-
-## 📊 Production Results
-
-### DeepEval Evaluation — gpt-4o-mini judge
+## 📁 Updated Files
 
 ```
-PDF:        Openclaw Research Report (34 pages, 92 chunks)
-Goldens:    10 synthesized test cases
-Judge:      GPT-4o-mini (gpt-5.4-mini)
-Cost:       ~$0.049 per full evaluation run
-
-┌──────────────────────────┬────────┬────────┐
-│ Metric                   │ Score  │ Status │
-├──────────────────────────┼────────┼────────┤
-│ Faithfulness             │ 100%   │  ✅    │
-│ Answer Relevancy         │ 100%   │  ✅    │
-│ Contextual Precision     │ 100%   │  ✅    │
-│ Contextual Recall        │  90%   │  ✅    │
-└──────────────────────────┴────────┴────────┘
-
-Note: Contextual Relevancy evaluated at chunk level.
-Research PDF chunks contain mixed content (references, tables,
-unrelated sections) alongside relevant text. Core RAG quality
-metrics — Faithfulness and Answer Relevancy — are both 100%.
+backend/api.py          ← Security guardrails integrated, Redis dedup on ingest
+backend/rag_graph.py    ← All LLM calls use invoke_with_fallback, context sanitized
+backend/vector_store.py ← RedisStore embedding cache (falls back to LocalFileStore)
+evaluate.py             ← Baseline comparison, regression detection, CI exit codes
+requirements.txt        ← Added: redis
+requirements-backend.txt← Backend-only deps (no deepeval/streamlit in prod image)
+requirements-frontend.txt← Frontend-only deps
+Dockerfile.backend      ← Uses requirements-backend.txt
+Dockerfile.frontend     ← Uses requirements-frontend.txt
 ```
 
-### Live Test on AWS EC2 — Research Paper Q&A
-
-```
-Input:     "Give me summary of attention is all you need based on uploaded document"
-Route:     retrieve
-Chunks:    4 hybrid BM25+dense results
-Output:    Structured summary of encoder-decoder attention, multi-head
-           attention, and positional encodings
-Latency:   ~3.2s end-to-end (including token streaming)
-```
-![summary](docs/images/summ.png)
-
-### Claim Verification — Live Result
-
-```
-Input:     "Are positional encodings from original Transformer still used
-            in modern LLMs, or have they been replaced?"
-Route:     verify_claim
-Searches:  2 Tavily calls (general + arXiv)
-Verdict:   OUTDATED — RoPE has replaced sinusoidal positional encodings
-Papers:    3 superseding papers with URLs and summaries
-Latency:   ~5.1s (dual search + structured generation)
-```
-![claim](docs/images/claim.png)
 ---
 
 ## ⚡ Infrastructure
 
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#1e3a5f', 'primaryTextColor': '#ffffff', 'primaryBorderColor': '#4a90d9', 'lineColor': '#4a90d9', 'clusterBkg': '#0d2137', 'clusterBorder': '#4a90d9', 'titleColor': '#ffffff', 'nodeTextColor': '#ffffff'}}}%%
-flowchart TB
-    subgraph AWS[AWS — us-east-1]
-        subgraph EC2[EC2 Instance — m7i-flex.large — Currently Deployed]
-            subgraph DC[Docker Compose]
-                FA2[FastAPI Container\nverirag-backend]
-                ST2[Streamlit Container\nverirag-frontend]
-                VOL1[Volume: verirag_data\nSQLite checkpoints]
-                VOL2[Volume: verirag_cache\nEmbedding cache]
-            end
-        end
-        ECR3[ECR — 2 repositories\nverirag-backend + verirag-frontend]
-        QDRANT4[Qdrant Cloud\nPer-session collections\nus-east-1]
-    end
-
-    subgraph EKS_SOON[EKS Migration — In Progress]
-        K8S[Kubernetes Manifests Ready]
-        HPA2[HPA — FastAPI 2-5 pods]
-        CICD[GitHub Actions CI/CD\nBuild → ECR → Rolling Deploy]
-        ROLL[Zero-downtime Rolling Updates\nmaxUnavailable=0]
-    end
-
-    ECR3 --> FA2 & ST2
-    FA2 --> QDRANT4
-    FA2 <--> VOL1
-    FA2 <--> VOL2
-
-    style FA2 fill:#145a32,stroke:#27ae60,color:#fff
-    style ST2 fill:#1a5276,stroke:#4a90d9,color:#fff
-    style VOL1 fill:#1b4f72,stroke:#5dade2,color:#fff
-    style VOL2 fill:#1b4f72,stroke:#5dade2,color:#fff
-    style ECR3 fill:#784212,stroke:#f0b27a,color:#fff
-    style QDRANT4 fill:#922b21,stroke:#f1948a,color:#fff
-    style K8S fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style HPA2 fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style CICD fill:#6e2f8a,stroke:#bb8fce,color:#fff
-    style ROLL fill:#6e2f8a,stroke:#bb8fce,color:#fff
 ```
+AWS EKS — us-east-1
+├── verirag namespace
+│   ├── verirag-backend (2 pods, HPA 2→5, t3.medium)
+│   ├── verirag-frontend (1 pod)
+│   └── redis (1 pod, ClusterIP — internal only)
+└── monitoring namespace (Prometheus + Grafana installed)
 
----
-
----
-
-## 📡 LangSmith Observability
-
-```python
-# backend/rag_graph.py — all nodes decorated with @traceable
-# LANGSMITH_TRACING=true in .env is all that is needed
-
-@traceable(name="router_node")
-def router_node(state: RAGState): ...
-
-@traceable(name="agent_node")
-def agent_node(state: RAGState): ...
-
-@traceable(name="relevancy_check_node")
-def relevancy_check_node(state: RAGState): ...
-
-@traceable(name="verify_claim_node")
-def verify_claim_node(state: RAGState): ...
-
-@traceable(name="generate_answer_node")
-def generate_answer_node(state: RAGState): ...
-
-# LangSmith dashboard shows per-run:
-# → per-node latency breakdown
-# → prompt + completion token counts per node
-# → exact inputs/outputs per node
-# → total cost per query
+AWS ECR — 2 repositories
+Qdrant Cloud — hybrid BM25 + dense collections
+GitHub Actions — eval-gate → build → deploy
 ```
-
----
-
-## 🔌 API Reference
-
-### Routes
-
-```
-GET  /health                          → Liveness probe — always 200
-GET  /ready                           → Readiness probe — 200 after LangGraph compiled
-GET  /sessions/{id}/info              → Collection stats, paper titles, hybrid flag
-GET  /sessions/{id}/history           → Reload past messages from SQLite checkpointer
-POST /sessions/{id}/ingest            → Upload PDF / URL / ArXiv ID → Qdrant
-POST /sessions/{id}/query             → Run RAG pipeline, stream answer tokens
-```
-
----
-
-## 🧰 Tech Stack
-
-| Category | Technology |
-|---|---|
-| Agent Orchestration | LangGraph StateGraph — conditional routing, cycles, shared RAGState |
-| LLM Integration | LangChain ChatOpenAI — GPT-4o-mini |
-| LLM Tracing | LangSmith @traceable — all nodes, zero overhead when key not set |
-| Dense Embeddings | OpenAI text-embedding-3-small — 1536-dim with CacheBackedEmbeddings |
-| Sparse Embeddings | FastEmbed BM25 (Qdrant/bm25) — local, no API key |
-| Vector DB | Qdrant Cloud — hybrid collections, RRF server-side fusion |
-| Web Search | Tavily API — general + arXiv-targeted dual search |
-| Session State | SQLite + LangGraph SqliteSaver checkpointer |
-| Rate Limiting | SlowAPI — 30 req/min per IP on /query route |
-| Evaluation | DeepEval — 5 metrics, gpt-4o-mini judge, Synthesizer goldens |
-| Serving | FastAPI async — NDJSON streaming, Pydantic schemas |
-| Frontend | Streamlit — token streaming, session sidebar, sources expander |
-| Containerization | Docker — 2 independent containers, named volumes |
-| Infrastructure | AWS EC2 (m7i-flex.large) + ECR — currently deployed |
-| EKS Migration | Kubernetes manifests + HPA + GitHub Actions CI/CD — in progress |
-| Monitoring | LangSmith — per-node latency, token costs, trace history |
-
----
-
-## 🔢 Key Numbers — At a Glance
-
-| Metric | Value |
-|---|---|
-| LangGraph nodes | 7 (router, agent, retrieval, relevancy, rewrite, verify, generate) |
-| Embedding dimensions | 1536 (text-embedding-3-small) |
-| Hybrid search | BM25 sparse + dense cosine, RRF server-side |
-| Session isolation | Per-session Qdrant collection (UUID-keyed) |
-| Rate limit | 30 req/min per IP on /query |
-| Faithfulness | 100% (DeepEval, gpt-4o-mini judge) |
-| Answer Relevancy | 100% (DeepEval, gpt-4o-mini judge) |
-| Contextual Recall | 90% (DeepEval) |
-| Eval cost | ~$0.049 per full run (10 test cases) |
-| Stream protocol | NDJSON — token events + done event |
-| Verification searches | 2 Tavily calls per verify_claim query |
-| Deployment | AWS EC2 — publicly accessible |
-| ECR repositories | 2 (verirag-backend, verirag-frontend) |
 
 ---
 
 ## 🚀 Local Setup
 
 ```bash
-git clone https://github.com/akashagalave/VeriRAG
-cd VeriRAG
+git clone https://github.com/akashagalave/VeriRAG-Pro
+cd VeriRAG-Pro
 
-# Setup environment
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure environment
+# Configure .env
 cp .env.example .env
 # Required: OPENAI_API_KEY, QDRANT_URL, QDRANT_API_KEY, TAVILY_API_KEY
-# Optional: LANGSMITH_API_KEY (enables LangSmith tracing)
+# Optional: REDIS_URL (app works without it, falls back to LocalFileStore)
+#           LANGSMITH_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
 
-# Run locally — 2 terminals
-uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload   # Terminal 1
-streamlit run app.py                                            # Terminal 2
-
-# Health check
-curl http://localhost:8000/health
-
-# Swagger UI
-open http://localhost:8000/docs
-
-# Streamlit UI
-open http://localhost:8501
-```
-
-### Docker Compose (Recommended)
-
-```bash
-docker compose up --build
-
-# Verify
-curl http://localhost:8000/health   # → {"status":"ok"}
-open http://localhost:8501          # → Streamlit UI
+# Run locally
+uvicorn backend.api:app --port 8000    # Terminal 1
+streamlit run app.py                   # Terminal 2
 ```
 
 ### Run Evaluation
 
 ```bash
-python evaluate.py
-# Generates goldens.json + eval_results.json
-# Prints per-metric scores and pass rates
+python evaluate.py          # creates eval_baseline.json
+python evaluate.py --ci     # CI mode — exit 1 on regression
+```
+
+### Docker Compose
+
+```bash
+docker compose up --build
 ```
 
 ---
 
-## 🔑 System Modes
+## 🔑 Environment Variables
 
-### Mode 1 — Document Q&A
+| Variable | Required | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | ✅ | Primary LLM provider |
+| `QDRANT_URL` | ✅ | Qdrant Cloud endpoint |
+| `QDRANT_API_KEY` | ✅ | Qdrant auth key |
+| `TAVILY_API_KEY` | ✅ | Web search for retrieval + claim verification |
+| `LANGSMITH_API_KEY` | Optional | Enables LangSmith tracing |
+| `REDIS_URL` | Optional | Enables distributed cache (falls back to LocalFileStore) |
+| `ANTHROPIC_API_KEY` | Optional | Enables Claude Haiku fallback |
+| `GOOGLE_API_KEY` | Optional | Enables Gemini Flash fallback |
 
-```
-Upload PDF / URL / ArXiv ID → Ask questions → Get grounded answers with sources
+---
 
-Example:
-  Input:  "What methodology did the authors use?"
-  Route:  retrieve
-  Output: Answer grounded in retrieved chunks + sources expander
-```
+## 🧰 Full Tech Stack
 
-### Mode 2 — Claim Verification
+| Category | Technology |
+|---|---|
+| Agent Orchestration | LangGraph StateGraph — 7 nodes, conditional routing, shared RAGState |
+| LLM Integration | LangChain — GPT-4o-mini (primary), Claude Haiku, Gemini Flash (fallbacks) |
+| LLM Reliability | Custom circuit breakers — CLOSED/OPEN/HALF-OPEN, exponential backoff retry |
+| LLM Tracing | LangSmith @traceable — all nodes |
+| Dense Embeddings | OpenAI text-embedding-3-small — 1536-dim |
+| Embedding Cache | CacheBackedEmbeddings — RedisStore (shared) or LocalFileStore (local dev) |
+| Sparse Embeddings | FastEmbed BM25 (Qdrant/bm25) — local, no API key |
+| Vector DB | Qdrant Cloud — hybrid collections, RRF server-side fusion |
+| Distributed Cache | Redis pod on Kubernetes — document dedup + embedding cache |
+| Web Search | Tavily API — general + arXiv dual search |
+| Security | Custom — 18-pattern injection detection, context sanitizer, PII redaction |
+| Session State | SQLite + LangGraph SqliteSaver checkpointer |
+| Rate Limiting | SlowAPI — 30 req/min per IP |
+| Evaluation | DeepEval — 5 metrics, baseline regression detection, CI quality gate |
+| Serving | FastAPI async — NDJSON streaming, Pydantic schemas |
+| Frontend | Streamlit — token streaming, session sidebar, sources expander |
+| Containerization | Docker — separate backend/frontend images, named volumes |
+| Infrastructure | AWS EKS (Kubernetes 1.32) + ECR |
+| Autoscaling | HPA — FastAPI 2-5 pods, CPU 70% target |
+| CI/CD | GitHub Actions — eval-gate → build → deploy (3-job pipeline) |
 
-```
-Ask if a research finding is still current → Get verdict with superseding papers
+---
 
-Example:
-  Input:  "Is attention mechanism still the standard in modern LLMs?"
-  Route:  verify_claim
-  Output: Verdict (VALID/OUTDATED) + superseding papers with URLs
-```
+## 🔢 Key Numbers
 
-### Mode 3 — Direct Answer
+| Metric | Value |
+|---|---|
+| Security patterns | 18 regex patterns for injection detection |
+| Faithfulness (baseline) | 0.94 |
+| Answer Relevancy (baseline) | 0.88 |
+| Redis cache hit rate | 49% (95 hits / 192 total lookups) |
+| Redis keys stored | 97 after real document ingestion |
+| Circuit breaker threshold | 3 failures → OPEN, 60s → HALF-OPEN probe |
+| LLM fallback chain | GPT-4o-mini → Claude Haiku → Gemini Flash |
+| CI/CD jobs | 3 sequential (eval-gate → build → deploy) |
+| Eval cost | ~$0.049 per full run |
+| EKS pods | 2 backend + 1 frontend + 1 Redis |
 
-```
-General knowledge questions need no retrieval
+---
 
-Example:
-  Input:  "What is the transformer architecture?"
-  Route:  direct_answer
-  Output: Answer from model knowledge — no retrieval cost
-```
+## 🔗 Related
 
-### Mode 4 — /btw Side Channel
-
-```
-Quick question without saving to session history
-
-Example:
-  Input:  /btw what is RoPE?
-  Output: Instant answer — not saved to chat history
-```
+- **Original project:** [akashagalave/VeriRAG](https://github.com/akashagalave/VeriRAG)
 
 ---
 

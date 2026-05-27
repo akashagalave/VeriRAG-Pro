@@ -33,8 +33,7 @@ uvicorn>=0.30.0
 # Redis distributed cache + deduplication (Improvement 3)
 redis>=5.0.0
 
-# Prometheus metrics / observability (Improvement 5)
-prometheus-client>=0.20.0
+
 
 # Security — PII redaction (Improvement 1, optional — graceful if absent)
 # presidio-analyzer>=2.2.0

@@ -5,3 +5,13 @@ pzperai_new/
 paperai_env/
 pro
 pro/
+
+.env
+*.db
+*.db-shm
+*.db-wal
+embedding_cache/
+.deepeval/
+eval_results.json
+eval_summary.md
+iam-policy.json
