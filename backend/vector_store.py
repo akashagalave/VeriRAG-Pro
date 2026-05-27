@@ -3,7 +3,6 @@ import os
 
 from dotenv import load_dotenv
 from langchain_classic.embeddings import CacheBackedEmbeddings
-from langchain_classic.storage import LocalFileStore
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
@@ -27,17 +26,42 @@ SPARSE_VECTOR_NAME = "sparse"
 
 # ── Singletons ────────────────────────────────────────────────────────────────
 
-base_embeddings     = OpenAIEmbeddings(model="text-embedding-3-small")
-embedding_file_store = LocalFileStore("./embedding_cache/")
+base_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-# Local disk cache for embeddings — shared within a single pod.
-# NOTE: In multi-pod EKS this cache is per-pod (not shared).
-# Redis deduplication in api.py prevents re-ingesting the same document,
-# which is the main source of duplicate embeddings at scale.
-# A full Redis embedding cache would be the next upgrade after this.
+# ── Embedding cache — Redis if available, LocalFileStore fallback ─────────────
+#
+# With REDIS_URL set (EKS + Redis pod):
+#   - All pods share one cache
+#   - Same text chunk never embedded twice across any pod
+#   - Survives pod restarts (as long as Redis pod is alive)
+#
+# Without REDIS_URL (local dev):
+#   - Falls back to LocalFileStore (per-process cache)
+#   - Still avoids duplicate calls within same process session
+#
+REDIS_URL = os.getenv("REDIS_URL", "")
+
+if REDIS_URL:
+    try:
+        from langchain_community.storage import RedisStore
+        embedding_store = RedisStore(
+            redis_url=REDIS_URL,
+            namespace="verirag:embeddings",
+            ttl=None,  # keep forever — embeddings don't expire
+        )
+        logger.info("Embedding cache: Redis (shared across all pods) url=%s", REDIS_URL)
+    except Exception as exc:
+        logger.warning("RedisStore init failed (%s) — falling back to LocalFileStore", exc)
+        from langchain_classic.storage import LocalFileStore
+        embedding_store = LocalFileStore("./embedding_cache/")
+else:
+    from langchain_classic.storage import LocalFileStore
+    embedding_store = LocalFileStore("./embedding_cache/")
+    logger.info("Embedding cache: LocalFileStore (no REDIS_URL set — local dev mode)")
+
 embeddings = CacheBackedEmbeddings.from_bytes_store(
     base_embeddings,
-    embedding_file_store,
+    embedding_store,
     namespace=base_embeddings.model,
     query_embedding_cache=True,
     key_encoder="blake2b",

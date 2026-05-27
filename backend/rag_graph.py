@@ -1,4 +1,3 @@
-
 # ── load env FIRST — LangSmith reads os.environ at import time ────────────────
 from dotenv import load_dotenv
 load_dotenv()
@@ -22,7 +21,6 @@ from langsmith import traceable
 from pydantic import BaseModel, Field
 from tavily import TavilyClient
 
-from backend.metrics import measure_llm, measure_retrieval
 from backend.model_router import get_primary_llm, invoke_with_fallback
 from backend.models import ClaimVerificationResult, RelevancyDecision, RouterDecision
 from backend.security import sanitize_context
@@ -32,8 +30,6 @@ from backend.vector_store import search as vs_search
 _LS_PROJECT = os.getenv("LANGSMITH_PROJECT", "LangGraph-Database-Backend")
 
 # ── Primary LLM (from model router) ──────────────────────────────────────────
-# Used only where we need the raw LLM object (tool binding singletons).
-# All invoke() calls use invoke_with_fallback() for circuit-breaker protection.
 llm = get_primary_llm()
 
 
@@ -88,11 +84,10 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 def router_node(state: RAGState) -> dict:
     """Classify query → retrieve | verify_claim | direct_answer."""
     query = state["messages"][-1].content
-    with measure_llm(node="router", model="gpt-4o-mini"):
-        decision: RouterDecision = invoke_with_fallback(
-            ROUTER_PROMPT.format_messages(query=query),
-            structured_output_schema=RouterDecision,
-        )
+    decision: RouterDecision = invoke_with_fallback(
+        ROUTER_PROMPT.format_messages(query=query),
+        structured_output_schema=RouterDecision,
+    )
     return {"route": decision.route}
 
 
@@ -121,8 +116,7 @@ def retrieve_from_vectorstore(
     """Search the uploaded research paper vector store for relevant passages.
     Uses hybrid BM25 + dense retrieval with Reciprocal Rank Fusion.
     """
-    with measure_retrieval():
-        docs = vs_search(query=query, session_id=session_id, k=k)
+    docs = vs_search(query=query, session_id=session_id, k=k)
 
     if not docs:
         return [ToolMessage(
@@ -238,16 +232,14 @@ def agent_node(state: RAGState) -> dict:
     current_attempts = state.get("retrieval_attempts", 0)
     messages = [{"role": "system", "content": RETRIEVE_SYSTEM}] + state["messages"]
 
-    with measure_llm(node="agent", model="gpt-4o-mini"):
-        if current_attempts >= MAX_RETRIEVAL_ATTEMPTS:
-            # Plain invoke — no tools — prevents orphaned tool_call IDs
-            response = invoke_with_fallback(messages)
-        else:
-            response = invoke_with_fallback(
-                messages,
-                tools=RETRIEVAL_TOOLS,
-                parallel_tool_calls=False,
-            )
+    if current_attempts >= MAX_RETRIEVAL_ATTEMPTS:
+        response = invoke_with_fallback(messages)
+    else:
+        response = invoke_with_fallback(
+            messages,
+            tools=RETRIEVAL_TOOLS,
+            parallel_tool_calls=False,
+        )
 
     updates: dict = {"messages": [response]}
     if getattr(response, "tool_calls", None):
@@ -263,7 +255,6 @@ def agent_node(state: RAGState) -> dict:
 def relevancy_check_node(state: RAGState) -> dict:
     """
     Lightweight LLM call that decides whether retrieved chunks are good enough.
-    Uses invoke_with_fallback for resilience.
     """
     query = state["query"]
     docs = state.get("retrieved_docs") or []
@@ -276,14 +267,13 @@ def relevancy_check_node(state: RAGState) -> dict:
         "Are these chunks relevant to answering the question?"
     )
 
-    with measure_llm(node="relevancy_check", model="gpt-4o-mini"):
-        decision: RelevancyDecision = invoke_with_fallback(
-            [
-                {"role": "system", "content": RELEVANCY_CHECK_SYSTEM},
-                {"role": "user",   "content": prompt},
-            ],
-            structured_output_schema=RelevancyDecision,
-        )
+    decision: RelevancyDecision = invoke_with_fallback(
+        [
+            {"role": "system", "content": RELEVANCY_CHECK_SYSTEM},
+            {"role": "user",   "content": prompt},
+        ],
+        structured_output_schema=RelevancyDecision,
+    )
     return {"is_relevant": decision.is_relevant}
 
 
@@ -300,11 +290,10 @@ def query_rewrite_node(state: RAGState) -> dict:
     original_query = state["query"]
     rewrite_count = state.get("rewrite_count", 0)
 
-    with measure_llm(node="query_rewrite", model="gpt-4o-mini"):
-        response = invoke_with_fallback([
-            {"role": "system", "content": QUERY_REWRITE_SYSTEM},
-            {"role": "user",   "content": f"Original query: {original_query}\n\nWrite an improved search query."},
-        ])
+    response = invoke_with_fallback([
+        {"role": "system", "content": QUERY_REWRITE_SYSTEM},
+        {"role": "user",   "content": f"Original query: {original_query}\n\nWrite an improved search query."},
+    ])
 
     rewritten = response.content.strip()
     return {
@@ -339,7 +328,7 @@ CLAIM_ANALYSIS_PROMPT = (
 def verify_claim_node(state: RAGState) -> dict:
     """
     Dual Tavily search (general web + arXiv) to find papers that supersede
-    or challenge the user's claim. Returns structured verdict + citations.
+    or challenge the user's claim.
     """
     claim = state["messages"][-1].content
     tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
@@ -374,11 +363,10 @@ def verify_claim_node(state: RAGState) -> dict:
         f"Search Results:\n{context}"
     )
 
-    with measure_llm(node="verify_claim", model="gpt-4o-mini"):
-        result: ClaimVerificationResult = invoke_with_fallback(
-            [{"role": "user", "content": prompt}],
-            structured_output_schema=ClaimVerificationResult,
-        )
+    result: ClaimVerificationResult = invoke_with_fallback(
+        [{"role": "user", "content": prompt}],
+        structured_output_schema=ClaimVerificationResult,
+    )
 
     papers_dicts = [p.model_dump() for p in result.superseding_papers[:3]]
     return {
@@ -417,10 +405,9 @@ def generate_answer_node(state: RAGState) -> dict:
             else:
                 context = "\n\n---\n\n".join(doc.page_content for doc in docs)
                 prompt = f"Answer the question using this context:\n\n{context}\n\nQuestion: {query}"
-                with measure_llm(node="generate_answer", model="gpt-4o-mini"):
-                    answer = invoke_with_fallback(
-                        [{"role": "user", "content": prompt}]
-                    ).content
+                answer = invoke_with_fallback(
+                    [{"role": "user", "content": prompt}]
+                ).content
 
     elif route == "verify_claim":
         verdict = state.get("claim_verdict", "")
@@ -450,10 +437,9 @@ def generate_answer_node(state: RAGState) -> dict:
 
     else:  # direct_answer
         prompt = f"Answer from your knowledge.\n\nQuestion: {query}"
-        with measure_llm(node="generate_answer", model="gpt-4o-mini"):
-            answer = invoke_with_fallback(
-                [{"role": "user", "content": prompt}]
-            ).content
+        answer = invoke_with_fallback(
+            [{"role": "user", "content": prompt}]
+        ).content
 
     return {"answer": answer, "messages": [AIMessage(content=answer)]}
 
@@ -500,7 +486,7 @@ def build_graph(db_path: str = "checkpoints.db"):
       - Output validation runs in api.py AFTER graph (before streaming done event)
 
     Model router integration:
-      - All llm.invoke() calls replaced with invoke_with_fallback()
+      - All llm.invoke() calls use invoke_with_fallback()
       - Circuit breakers protect against provider outages
       - Fallback chain: GPT-4o-mini → Claude Haiku → Gemini Flash
     """
