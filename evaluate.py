@@ -32,7 +32,8 @@ from deepeval.test_case import LLMTestCase
 from backend.paper_loader import load_document
 from backend.rag_graph import build_graph
 from backend.vector_store import add_paper
-
+import sqlite3
+from langgraph.checkpoint.sqlite import SqliteSaver
 load_dotenv()
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -230,8 +231,14 @@ def main() -> int:
             logger.warning("Could not load baseline: %s", exc)
 
     # Build graph and load docs into a SINGLE shared eval session
+    
+
+    
     docs = load_document(PDF_PATH)
-    graph = build_graph(db_path="eval_checkpoints.db")
+    # graph = build_graph(db_path="eval_checkpoints.db")
+    _eval_conn = sqlite3.connect("eval_checkpoints.db", check_same_thread=False)
+    _eval_checkpointer = SqliteSaver(_eval_conn)
+    graph = build_graph(checkpointer=_eval_checkpointer)
     eval_session_id = f"eval_{uuid4().hex}"
     add_paper(docs, eval_session_id)
     logger.info("Evaluation session: %s (%d chunks)", eval_session_id, len(docs))
