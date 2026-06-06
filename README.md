@@ -1,3 +1,4 @@
+
 # 🚀 VeriRAG-Pro — Production AI Platform
 
 ### VeriRAG upgraded from a good RAG project to a production-oriented AI platform
@@ -7,6 +8,7 @@
 ![AWS](https://img.shields.io/badge/AWS-EKS%20%2B%20ECR-232F3E?style=for-the-badge&logo=amazon-aws&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-Agentic%20Pipeline-FF6B35?style=for-the-badge)
 ![Redis](https://img.shields.io/badge/Redis-Distributed%20Cache-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Shared%20Sessions-336791?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Security](https://img.shields.io/badge/Security-Prompt%20Injection%20%2B%20PII-FF4444?style=for-the-badge)
 ![DeepEval](https://img.shields.io/badge/DeepEval-CI%20Quality%20Gate-4CAF50?style=for-the-badge)
 ![CircuitBreaker](https://img.shields.io/badge/Circuit%20Breaker-GPT→Claude→Gemini-412991?style=for-the-badge&logo=openai&logoColor=white)
@@ -27,11 +29,11 @@ Multi-hop Query Routing  ·  Scientific Claim Verification
 DeepEval  ·  FastAPI  ·  LangSmith  ·  Docker  ·  AWS EKS  ·  HPA  ·  CI/CD
 ```
 
-VeriRAG-Pro transforms it from a **good RAG project** into a **production AI platform** by adding 4 engineering improvements that most GenAI projects lack — security, reliability, distributed caching, and automated quality gates.
+VeriRAG-Pro transforms it from a **good RAG project** into a **production AI platform** by adding 6 engineering improvements that most GenAI projects lack — security, reliability, distributed caching, automated quality gates, shared session state, and distributed rate limiting.
 
 ---
 
-## 🔧 4 Production Improvements
+## 🔧 6 Production Improvements
 
 ### 1. 🔒 Security Layer — Multi-layer GenAI Security
 
@@ -42,7 +44,7 @@ VeriRAG-Pro transforms it from a **good RAG project** into a **production AI pla
 | Layer | What it does | Fail policy |
 |---|---|---|
 | Input Guardrail | 18 regex patterns — blocks prompt injection, jailbreaks, DAN attacks before graph runs | Fail-closed → HTTP 400 |
-| Context Sanitizer | Strips hidden instructions from every retrieved web chunk — guards against retrieval poisoning | Fail-open → log and continue |
+| Context Sanitizer | Strips hidden instructions from every retrieved chunk — guards against retrieval poisoning | Fail-open → log and continue |
 | Output Validator | Scans LLM output for PII (email, phone, SSN, Aadhaar) before sending to user | Fail-open → redact and continue |
 
 **Confirmed live:**
@@ -146,7 +148,7 @@ Every LLM call → invoke_with_fallback()
 ```
 CLOSED    → healthy, requests go through
 OPEN      → 3+ consecutive failures → block provider, try next
-HALF-OPEN → after 60s → send one probe → if success → CLOSED
+HALF-OPEN → after 60s → send one probe → if success → CLOSED (auto-heal)
 ```
 
 **Confirmed live:**
@@ -159,6 +161,64 @@ GET /health
   ]
 }
 ```
+
+---
+
+### 5. 🗄️ PostgreSQL Shared Sessions — Multi-Pod Session State
+
+**Problem:** SQLite is per-pod. With 2 FastAPI pods on EKS (HPA), each pod has its own `checkpoints.db`. When the load balancer routes a request to a different pod, conversation history disappears.
+
+```
+Before fix:
+  User Message 1 → Pod-1 → saved to Pod-1's checkpoints.db
+  User Message 2 → Pod-2 → Pod-2's checkpoints.db is EMPTY → history lost
+
+After fix:
+  User Message 1 → Pod-1 → saved to shared PostgreSQL
+  User Message 2 → Pod-2 → reads same PostgreSQL → history intact ✅
+```
+
+**Solution:** Replace `SqliteSaver` with `PostgresSaver`. Both pods connect to one shared PostgreSQL pod inside the cluster.
+
+```python
+# Production (EKS) — DATABASE_URL set via Kubernetes secret
+checkpointer = PostgresSaver(psycopg.connect(DATABASE_URL, autocommit=True))
+checkpointer.setup()  # creates tables if not exist
+
+# Local dev — DATABASE_URL empty → SQLite fallback
+checkpointer = SqliteSaver(sqlite3.connect("checkpoints.db"))
+```
+
+**Confirmed live on EKS:**
+```sql
+SELECT * FROM pg_tables WHERE schemaname = 'public';
+-- checkpoints           ← session history
+-- checkpoint_blobs      ← state storage
+-- checkpoint_writes     ← node writes
+-- checkpoint_migrations ← schema versioning
+```
+
+---
+
+### 6. 🚦 Distributed Rate Limiting — Real Limit Across All Pods
+
+**Problem:** SlowAPI in-memory rate limiting is per-pod. With 5 pods, the effective limit is 30 × 5 = 150 req/min — completely meaningless.
+
+```
+Before fix (per-pod):
+  Pod-1: 30 req/min allowed  ← own counter
+  Pod-2: 30 req/min allowed  ← own counter
+  Pod-3: 30 req/min allowed  ← own counter
+  Effective limit: 90 req/min (meaningless)
+
+After fix (shared Redis):
+  Pod-1, Pod-2, Pod-3 all check the same Redis counter
+  Effective limit: 30 req/min total across entire cluster ✅
+```
+
+
+
+No new infrastructure — uses the same Redis pod already deployed for caching.
 
 ---
 
@@ -181,6 +241,7 @@ flowchart TD
     end
 
     subgraph Cache[Redis Cache]
+        RL[Rate Limiter\nDistributed 30 req/min]
         DD[Document Dedup\nSHA-256 hash check]
         EC[Embedding Cache\nCacheBackedEmbeddings + RedisStore]
     end
@@ -189,11 +250,16 @@ flowchart TD
         GRAPH[7-node RAG Graph\nrouter → agent → retrieval\nrelevancy → rewrite\nverify → generate]
     end
 
+    subgraph State[Session State]
+        PG[PostgreSQL\nShared across all pods\nlanggraph_checkpoints]
+    end
+
     subgraph Eval[CI/CD Quality Gate]
         EG[eval-gate job\nDeepEval baseline check\nblocks on regression]
     end
 
-    USER --> IG
+    USER --> RL
+    RL --> IG
     IG --> DD
     DD --> EC
     EC --> Pipeline
@@ -201,6 +267,7 @@ flowchart TD
     CS --> MR
     MR --> CB
     Pipeline --> OV
+    Pipeline --> PG
     OV --> USER
     EG --> Pipeline
 
@@ -209,60 +276,35 @@ flowchart TD
     style OV fill:#922b21,stroke:#f1948a,color:#fff
     style MR fill:#6e2f8a,stroke:#bb8fce,color:#fff
     style CB fill:#6e2f8a,stroke:#bb8fce,color:#fff
+    style RL fill:#784212,stroke:#f0b27a,color:#fff
     style DD fill:#784212,stroke:#f0b27a,color:#fff
     style EC fill:#784212,stroke:#f0b27a,color:#fff
     style GRAPH fill:#145a32,stroke:#27ae60,color:#fff
     style EG fill:#1b4f72,stroke:#5dade2,color:#fff
+    style PG fill:#1a5276,stroke:#5dade2,color:#fff
 ```
 
----
+-
 
-## 📁 New Files Added
 
-```
-backend/
-├── security.py       ← Layer 1/2/3 security (prompt injection, sanitizer, PII)
-├── redis_cache.py    ← SHA-256 document dedup, Redis key management
-├── model_router.py   ← Circuit breakers, invoke_with_fallback, provider registry
-
-k8s/
-├── redis.yml         ← Redis pod + ClusterIP service deployment
-
-.github/workflows/
-└── deploy.yml        ← Updated: eval-gate → build → deploy (3-job pipeline)
-```
-
----
-
-## 📁 Updated Files
-
-```
-backend/api.py          ← Security guardrails integrated, Redis dedup on ingest
-backend/rag_graph.py    ← All LLM calls use invoke_with_fallback, context sanitized
-backend/vector_store.py ← RedisStore embedding cache (falls back to LocalFileStore)
-evaluate.py             ← Baseline comparison, regression detection, CI exit codes
-requirements.txt        ← Added: redis
-requirements-backend.txt← Backend-only deps (no deepeval/streamlit in prod image)
-requirements-frontend.txt← Frontend-only deps
-Dockerfile.backend      ← Uses requirements-backend.txt
-Dockerfile.frontend     ← Uses requirements-frontend.txt
-```
 
 ---
 
 ## ⚡ Infrastructure
 
 ```
-AWS EKS — us-east-1
+AWS EKS — us-east-1 (Kubernetes 1.32)
 ├── verirag namespace
-│   ├── verirag-backend (2 pods, HPA 2→5, t3.medium)
+│   ├── verirag-backend  (2 pods, HPA 2→5, t3.medium)
 │   ├── verirag-frontend (1 pod)
-│   └── redis (1 pod, ClusterIP — internal only)
-└── monitoring namespace (Prometheus + Grafana installed)
+│   ├── redis            (1 pod, ClusterIP — cache + rate limiting)
+│   └── postgres         (1 pod, ClusterIP — shared session state)
+└── kube-system
+    └── aws-load-balancer-controller (NLB provisioning)
 
-AWS ECR — 2 repositories
-Qdrant Cloud — hybrid BM25 + dense collections
-GitHub Actions — eval-gate → build → deploy
+AWS ECR         — 2 repositories (backend + frontend)
+Qdrant Cloud    — hybrid BM25 + dense collections
+GitHub Actions  — eval-gate → build → deploy
 ```
 
 ---
@@ -280,7 +322,8 @@ pip install -r requirements.txt
 # Configure .env
 cp .env.example .env
 # Required: OPENAI_API_KEY, QDRANT_URL, QDRANT_API_KEY, TAVILY_API_KEY
-# Optional: REDIS_URL (app works without it, falls back to LocalFileStore)
+# Optional: REDIS_URL      (falls back to LocalFileStore if not set)
+#           DATABASE_URL   (falls back to SQLite if not set)
 #           LANGSMITH_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY
 
 # Run locally
@@ -312,7 +355,8 @@ docker compose up --build
 | `QDRANT_API_KEY` | ✅ | Qdrant auth key |
 | `TAVILY_API_KEY` | ✅ | Web search for retrieval + claim verification |
 | `LANGSMITH_API_KEY` | Optional | Enables LangSmith tracing |
-| `REDIS_URL` | Optional | Enables distributed cache (falls back to LocalFileStore) |
+| `REDIS_URL` | Optional | Enables Redis cache + distributed rate limiting |
+| `DATABASE_URL` | Optional | PostgreSQL for shared sessions (SQLite fallback if not set) |
 | `ANTHROPIC_API_KEY` | Optional | Enables Claude Haiku fallback |
 | `GOOGLE_API_KEY` | Optional | Enables Gemini Flash fallback |
 
@@ -331,14 +375,13 @@ docker compose up --build
 | Sparse Embeddings | FastEmbed BM25 (Qdrant/bm25) — local, no API key |
 | Vector DB | Qdrant Cloud — hybrid collections, RRF server-side fusion |
 | Distributed Cache | Redis pod on Kubernetes — document dedup + embedding cache |
-| Web Search | Tavily API — general + arXiv dual search |
+| Rate Limiting | SlowAPI — 30 req/min per IP, Redis-backed (shared across all pods) |
+| Session State | PostgreSQL + LangGraph PostgresSaver — shared across all pods (SQLite fallback for local dev) |
 | Security | Custom — 18-pattern injection detection, context sanitizer, PII redaction |
-| Session State | SQLite + LangGraph SqliteSaver checkpointer |
-| Rate Limiting | SlowAPI — 30 req/min per IP |
 | Evaluation | DeepEval — 5 metrics, baseline regression detection, CI quality gate |
 | Serving | FastAPI async — NDJSON streaming, Pydantic schemas |
 | Frontend | Streamlit — token streaming, session sidebar, sources expander |
-| Containerization | Docker — separate backend/frontend images, named volumes |
+| Containerization | Docker — separate backend/frontend images |
 | Infrastructure | AWS EKS (Kubernetes 1.32) + ECR |
 | Autoscaling | HPA — FastAPI 2-5 pods, CPU 70% target |
 | CI/CD | GitHub Actions — eval-gate → build → deploy (3-job pipeline) |
@@ -358,7 +401,9 @@ docker compose up --build
 | LLM fallback chain | GPT-4o-mini → Claude Haiku → Gemini Flash |
 | CI/CD jobs | 3 sequential (eval-gate → build → deploy) |
 | Eval cost | ~$0.049 per full run |
-| EKS pods | 2 backend + 1 frontend + 1 Redis |
+| EKS pods | 2 backend + 1 frontend + 1 Redis + 1 PostgreSQL |
+| Rate limit | 30 req/min per IP — shared across ALL pods via Redis |
+| Session tables | checkpoints, checkpoint_blobs, checkpoint_writes |
 
 ---
 
@@ -373,3 +418,4 @@ docker compose up --build
 **Akash Agalave**
 - GitHub: [@akashagalave](https://github.com/akashagalave)
 - LinkedIn: [linkedin.com/in/akash-agalave](https://linkedin.com/in/akash-agalave)
+```
