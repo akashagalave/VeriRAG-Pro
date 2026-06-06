@@ -1,4 +1,3 @@
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -32,12 +31,37 @@ from backend.vector_store import add_paper, collection_stats, get_collection_nam
 
 logger = logging.getLogger(__name__)
 
-# ── Rate limiter 
-
+# ── Rate limiter ──────────────────────────────────────────────────────────────
+# In EKS: REDIS_URL is set → all pods share one counter → real 30 req/min limit
+# Locally: REDIS_URL is empty → in-memory fallback (single process, fine for dev)
 _rate = os.getenv("RATE_LIMIT_PER_MINUTE", "30")
-limiter = Limiter(key_func=get_remote_address)
+_redis_url = os.getenv("REDIS_URL", "")
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri=_redis_url if _redis_url else "memory://",
+)
+
+# ── Checkpointer — PostgreSQL in EKS, SQLite fallback for local dev ──────────
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
+if DATABASE_URL:
+    import psycopg
+    from langgraph.checkpoint.postgres import PostgresSaver
+    _pg_conn = psycopg.connect(DATABASE_URL, autocommit=True)
+    checkpointer = PostgresSaver(_pg_conn)
+    checkpointer.setup()   # creates langgraph_checkpoints + langgraph_writes tables
+    logger.info("Checkpointer: PostgreSQL (shared sessions across all pods)")
+else:
+    import sqlite3
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    _db_path = os.getenv("CHECKPOINT_DB", "checkpoints.db")
+    _sqlite_conn = sqlite3.connect(_db_path, check_same_thread=False)
+    checkpointer = SqliteSaver(_sqlite_conn)
+    logger.info("Checkpointer: SQLite at %s (local dev — breaks with 2+ pods)", _db_path)
 
 
+# ── Graph singleton ───────────────────────────────────────────────────────────
 _graph = None
 
 
@@ -45,7 +69,7 @@ _graph = None
 async def lifespan(app: FastAPI):
     global _graph
     logger.info("Building LangGraph…")
-    _graph = build_graph(db_path=os.getenv("CHECKPOINT_DB", "checkpoints.db"))
+    _graph = build_graph(checkpointer=checkpointer)
     logger.info("LangGraph ready.")
     yield
     logger.info("VeriRAG FastAPI shutdown.")
@@ -60,7 +84,7 @@ def get_graph():
     return _graph
 
 
-
+# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="VeriRAG API",
     description=(
@@ -72,7 +96,7 @@ app = FastAPI(
         "- Hybrid BM25 + dense retrieval with RRF fusion\n"
         "- LangSmith tracing for all graph nodes"
     ),
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan,
 )
 
@@ -88,7 +112,7 @@ app.add_middleware(
 )
 
 
-
+# ── Schemas ───────────────────────────────────────────────────────────────────
 class QueryRequest(BaseModel):
     question: str = Field(
         ..., min_length=1, max_length=2000,
@@ -119,7 +143,7 @@ class SessionInfoResponse(BaseModel):
     paper_titles: list[str]
 
 
-
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["ops"], summary="Liveness probe")
 async def health():
     """Always 200. Includes circuit breaker status for each LLM provider."""
@@ -137,7 +161,6 @@ async def ready():
     return {"status": "ready"}
 
 
-
 @app.get(
     "/sessions/{session_id}/info",
     response_model=SessionInfoResponse,
@@ -148,7 +171,6 @@ async def session_info(session_id: str):
     stats = collection_stats(session_id)
     titles = list_papers(session_id) if stats["exists"] else []
     return SessionInfoResponse(session_id=session_id, paper_titles=titles, **stats)
-
 
 
 @app.get(
@@ -184,7 +206,6 @@ async def session_history(session_id: str):
     return chats
 
 
-
 @app.post(
     "/sessions/{session_id}/ingest",
     response_model=IngestResponse,
@@ -216,7 +237,7 @@ async def ingest(
             raw_bytes = await file.read()
             doc_hash = compute_document_hash(raw_bytes)
 
-            # ── Redis deduplication check
+            # ── Redis deduplication check ──────────────────────────────────
             if is_document_indexed(doc_hash, session_id):
                 return IngestResponse(
                     session_id=session_id,
@@ -292,7 +313,7 @@ async def query_session(
 ):
     graph = get_graph()
 
-    # ── Layer 1: Input Guardrail (before graph, fail-closed)
+    # ── Layer 1: Input Guardrail (before graph, fail-closed) ──────────────
     guardrail = check_input(body.question)
     if not guardrail.safe:
         raise HTTPException(
@@ -345,7 +366,7 @@ async def query_session(
             if not full_answer:
                 full_answer = final_values.get("answer") or ""
 
-            # ── Layer 3: Output Validator (before done event)
+            # ── Layer 3: Output Validator (before done event) ──────────────
             validation = validate_output(full_answer)
             if not validation.safe:
                 logger.warning(
