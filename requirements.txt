@@ -33,7 +33,8 @@ uvicorn>=0.30.0
 # Redis distributed cache + deduplication (Improvement 3)
 redis>=5.0.0
 
-
+psycopg[binary]>=3.1.0
+langgraph-checkpoint-postgres>=2.0.0
 
 # Security — PII redaction (Improvement 1, optional — graceful if absent)
 # presidio-analyzer>=2.2.0

@@ -24,12 +24,14 @@ spec:
           ports:
             - containerPort: 8000
 
-          # ── Env from Secret + ConfigMap ──────────────────────────────────
+          # ── Env from Secret + ConfigMap 
           envFrom:
             - secretRef:
                 name: verirag-secrets
             - secretRef:
                 name: verirag-redis
+            - secretRef:
+                name: verirag-postgres       # ← ADD THIS
             - configMapRef:
                 name: verirag-config
 

@@ -19,3 +19,5 @@ __pycache__/
 *.pyc
 *.pyo
 ak.md
+VeriRAG-DeploymentGuide.md
+k8s/postgres-secret.yml

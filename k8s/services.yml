@@ -1,36 +1,35 @@
-# ── FastAPI backend service ───────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
   name: verirag-fastapi-service
   namespace: verirag
-  labels:
-    app: verirag-backend
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "instance"
 spec:
+  type: LoadBalancer
   selector:
     app: verirag-backend
   ports:
     - name: http
-      protocol: TCP
       port: 8000
       targetPort: 8000
-  type: LoadBalancer
-
 ---
-# ── Streamlit frontend service ────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
   name: verirag-streamlit-service
   namespace: verirag
-  labels:
-    app: verirag-frontend
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-type: "external"
+    service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "instance"
 spec:
+  type: LoadBalancer
   selector:
     app: verirag-frontend
   ports:
     - name: http
-      protocol: TCP
       port: 8501
       targetPort: 8501
-  type: LoadBalancer

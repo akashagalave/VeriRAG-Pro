@@ -7,11 +7,16 @@ on:
     paths:
       - "backend/**"
       - "app.py"
+      - "evaluate.py"                  # ← ADD: eval logic change triggers gate
       - "Dockerfile.backend"
       - "Dockerfile.frontend"
       - "pyproject.toml"
       - "requirements.txt"
+      - "requirements-backend.txt"     # ← ADD: backend deps change triggers build
+      - "requirements-frontend.txt"    # ← ADD: if you have this file
       - "k8s/**"
+      # NOT triggered by:
+      # README.md, docs/, *.md, interview docs, .gitignore
 
 env:
   AWS_REGION:       ${{ secrets.AWS_REGION }}
@@ -24,8 +29,6 @@ jobs:
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Job 1 — DeepEval Quality Gate
-  # Runs BEFORE building or deploying any images.
-  # Exit code 1 → pipeline stops → no deployment.
   # ═══════════════════════════════════════════════════════════════════════════
   eval-gate:
     name: DeepEval Quality Gate
@@ -83,7 +86,6 @@ jobs:
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Job 2 — Build & Push Docker Images
-  # Only runs if eval-gate passes.
   # ═══════════════════════════════════════════════════════════════════════════
   build:
     name: Build & Push Images
@@ -127,7 +129,6 @@ jobs:
 
   # ═══════════════════════════════════════════════════════════════════════════
   # Job 3 — Deploy to EKS
-  # Only runs if build succeeds (which requires eval-gate pass).
   # ═══════════════════════════════════════════════════════════════════════════
   deploy:
     name: Deploy to EKS

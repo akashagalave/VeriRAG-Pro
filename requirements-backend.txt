@@ -19,7 +19,8 @@ langchain-text-splitters>=1.1.2
 
 # LangGraph
 langgraph>=1.1.10
-langgraph-checkpoint-sqlite>=3.0.3
+langgraph-checkpoint-sqlite>=3.0.3  # kept — used as fallback in local dev
+langgraph-checkpoint-postgres>=2.0.0  # ← ADD: used in EKS production
 langsmith>=0.8.3
 
 # Vector store
@@ -38,3 +39,4 @@ tavily-python>=0.7.24
 
 # Production additions
 redis>=5.0.0
+psycopg[binary]>=3.1.0  # ← ADD: PostgreSQL driver for PostgresSaver

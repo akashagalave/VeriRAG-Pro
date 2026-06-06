@@ -1,9 +1,7 @@
-
 from dotenv import load_dotenv
 load_dotenv()
 
 import os
-import sqlite3
 import warnings
 from typing import Annotated
 
@@ -13,7 +11,6 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import InjectedToolCallId, tool
-from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, MessagesState, StateGraph
 from langgraph.prebuilt import InjectedState, ToolNode, tools_condition
 from langgraph.types import Command
@@ -28,10 +25,8 @@ from backend.vector_store import search as vs_search
 
 _LS_PROJECT = os.getenv("LANGSMITH_PROJECT", "LangGraph-Database-Backend")
 
-# ── Primary LLM (from model router) ──────────────────────────────────────────
+# Primary LLM 
 llm = get_primary_llm()
-
-
 
 
 class RAGState(MessagesState):
@@ -88,7 +83,6 @@ def router_node(state: RAGState) -> dict:
     return {"route": decision.route}
 
 
-
 class RetrieverInput(BaseModel):
     query: str = Field(description="Semantic query to search research paper chunks")
     k: int = Field(default=4, ge=1, le=10, description="Number of chunks to retrieve")
@@ -97,7 +91,6 @@ class RetrieverInput(BaseModel):
 class WebSearchInput(BaseModel):
     optimized_query: str = Field(description="Query rewritten and optimized for web search")
     max_results: int = Field(default=3, ge=1, le=10, description="Number of web results to return")
-
 
 
 @tool(args_schema=RetrieverInput)
@@ -119,7 +112,7 @@ def retrieve_from_vectorstore(
             tool_call_id=tool_call_id,
         )]
 
-    # ── Layer 2: sanitize retrieved content (retrieval poisoning protection) ──
+    #Layer 2: sanitize retrieved content
     sanitized_docs: list[Document] = []
     for doc in docs:
         result = sanitize_context(doc.page_content)
@@ -147,7 +140,7 @@ def web_search(
     if not results.get("results"):
         return [ToolMessage(content="No web results found.", tool_call_id=tool_call_id)]
 
-    # ── Layer 2: sanitize web content (indirect injection protection) ─────────
+    #Layer 2: sanitize web content
     web_docs: list[Document] = []
     for r in results["results"]:
         sanitized = sanitize_context(r["content"])
@@ -162,8 +155,6 @@ def web_search(
         Command(update={"retrieved_docs": (current_docs or []) + web_docs}),
     ]
 
-
-# ── Retrieval agent singletons ────────────────────────────────────────────────
 
 RETRIEVAL_TOOLS = [retrieve_from_vectorstore, web_search]
 retrieval_llm = llm.bind_tools(RETRIEVAL_TOOLS, parallel_tool_calls=False)
@@ -187,9 +178,6 @@ RETRIEVE_SYSTEM = (
     "Do NOT produce a final answer. Only call tools to collect context."
 )
 
-
-# ── Relevancy check ───────────────────────────────────────────────────────────
-
 RELEVANCY_CHECK_SYSTEM = (
     "You are evaluating whether retrieved document chunks are relevant enough "
     "to answer a user's question about research papers.\n\n"
@@ -208,7 +196,6 @@ QUERY_REWRITE_SYSTEM = (
 )
 
 
-# ── Nodes ─────────────────────────────────────────────────────────────────────
 
 MAX_RETRIEVAL_ATTEMPTS = 3
 
@@ -248,9 +235,7 @@ def agent_node(state: RAGState) -> dict:
     metadata={"project": _LS_PROJECT},
 )
 def relevancy_check_node(state: RAGState) -> dict:
-    """
-    Lightweight LLM call that decides whether retrieved chunks are good enough.
-    """
+    """Lightweight LLM call that decides whether retrieved chunks are good enough."""
     query = state["query"]
     docs = state.get("retrieved_docs") or []
     doc_snippets = "\n\n---\n\n".join(doc.page_content[:300] for doc in docs[:3])
@@ -430,7 +415,7 @@ def generate_answer_node(state: RAGState) -> dict:
                 f"*No papers directly superseding this claim were found in recent literature.*"
             )
 
-    else:  # direct_answer
+    else:  
         prompt = f"Answer from your knowledge.\n\nQuestion: {query}"
         answer = invoke_with_fallback(
             [{"role": "user", "content": prompt}]
@@ -438,8 +423,6 @@ def generate_answer_node(state: RAGState) -> dict:
 
     return {"answer": answer, "messages": [AIMessage(content=answer)]}
 
-
-# ── Graph wiring ──────────────────────────────────────────────────────────────
 
 def route_query(state: RAGState) -> str:
     return state["route"]
@@ -462,20 +445,26 @@ def after_relevancy_routing(state: RAGState) -> str:
     return "generate_answer"
 
 
-def build_graph(db_path: str = "checkpoints.db"):
+def build_graph(checkpointer=None):
+    """
+    Build and compile the LangGraph RAG pipeline.
 
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-
+    Parameters
+    ----------
+    checkpointer : BaseChatMemory | None
+        Pass a PostgresSaver (production / EKS) or SqliteSaver (local dev).
+        Created and injected by api.py — rag_graph no longer owns the DB connection.
+        If None, graph compiles without persistence (stateless — for testing only).
+    """
     graph = StateGraph(RAGState)
 
-    graph.add_node("router",           router_node)
-    graph.add_node("agent_node",       agent_node)
-    graph.add_node("retrieval",        base_tool_node)
-    graph.add_node("relevancy_check",  relevancy_check_node)
-    graph.add_node("query_rewrite",    query_rewrite_node)
-    graph.add_node("verify_claim",     verify_claim_node)
-    graph.add_node("generate_answer",  generate_answer_node)
+    graph.add_node("router",          router_node)
+    graph.add_node("agent_node",      agent_node)
+    graph.add_node("retrieval",       base_tool_node)
+    graph.add_node("relevancy_check", relevancy_check_node)
+    graph.add_node("query_rewrite",   query_rewrite_node)
+    graph.add_node("verify_claim",    verify_claim_node)
+    graph.add_node("generate_answer", generate_answer_node)
 
     graph.set_entry_point("router")
 
@@ -492,9 +481,9 @@ def build_graph(db_path: str = "checkpoints.db"):
         "agent_node",
         agent_routing,
         {
-            "retrieval":        "retrieval",
-            "relevancy_check":  "relevancy_check",
-            "generate_answer":  "generate_answer",
+            "retrieval":       "retrieval",
+            "relevancy_check": "relevancy_check",
+            "generate_answer": "generate_answer",
         },
     )
     graph.add_edge("retrieval",       "agent_node")

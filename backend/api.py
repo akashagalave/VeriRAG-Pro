@@ -31,9 +31,6 @@ from backend.vector_store import add_paper, collection_stats, get_collection_nam
 
 logger = logging.getLogger(__name__)
 
-# ── Rate limiter ──────────────────────────────────────────────────────────────
-# In EKS: REDIS_URL is set → all pods share one counter → real 30 req/min limit
-# Locally: REDIS_URL is empty → in-memory fallback (single process, fine for dev)
 _rate = os.getenv("RATE_LIMIT_PER_MINUTE", "30")
 _redis_url = os.getenv("REDIS_URL", "")
 
@@ -42,7 +39,6 @@ limiter = Limiter(
     storage_uri=_redis_url if _redis_url else "memory://",
 )
 
-# ── Checkpointer — PostgreSQL in EKS, SQLite fallback for local dev ──────────
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 if DATABASE_URL:
@@ -50,7 +46,7 @@ if DATABASE_URL:
     from langgraph.checkpoint.postgres import PostgresSaver
     _pg_conn = psycopg.connect(DATABASE_URL, autocommit=True)
     checkpointer = PostgresSaver(_pg_conn)
-    checkpointer.setup()   # creates langgraph_checkpoints + langgraph_writes tables
+    checkpointer.setup() 
     logger.info("Checkpointer: PostgreSQL (shared sessions across all pods)")
 else:
     import sqlite3
@@ -60,8 +56,6 @@ else:
     checkpointer = SqliteSaver(_sqlite_conn)
     logger.info("Checkpointer: SQLite at %s (local dev — breaks with 2+ pods)", _db_path)
 
-
-# ── Graph singleton ───────────────────────────────────────────────────────────
 _graph = None
 
 
@@ -84,7 +78,6 @@ def get_graph():
     return _graph
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="VeriRAG API",
     description=(
@@ -112,7 +105,6 @@ app.add_middleware(
 )
 
 
-# ── Schemas ───────────────────────────────────────────────────────────────────
 class QueryRequest(BaseModel):
     question: str = Field(
         ..., min_length=1, max_length=2000,
@@ -143,7 +135,6 @@ class SessionInfoResponse(BaseModel):
     paper_titles: list[str]
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
 @app.get("/health", tags=["ops"], summary="Liveness probe")
 async def health():
     """Always 200. Includes circuit breaker status for each LLM provider."""
@@ -237,7 +228,7 @@ async def ingest(
             raw_bytes = await file.read()
             doc_hash = compute_document_hash(raw_bytes)
 
-            # ── Redis deduplication check ──────────────────────────────────
+            #Redis deduplication check
             if is_document_indexed(doc_hash, session_id):
                 return IngestResponse(
                     session_id=session_id,
@@ -313,7 +304,7 @@ async def query_session(
 ):
     graph = get_graph()
 
-    # ── Layer 1: Input Guardrail (before graph, fail-closed) ──────────────
+    # ── Layer 1: Input Guardrail 
     guardrail = check_input(body.question)
     if not guardrail.safe:
         raise HTTPException(
@@ -353,7 +344,6 @@ async def query_session(
                     full_answer += chunk.content
                     yield json.dumps({"type": "token", "data": chunk.content}) + "\n"
 
-            # Read final state
             final_values = graph.get_state(config).values
             route = final_values.get("route") or "unknown"
 
@@ -366,7 +356,7 @@ async def query_session(
             if not full_answer:
                 full_answer = final_values.get("answer") or ""
 
-            # ── Layer 3: Output Validator (before done event) ──────────────
+            #Layer 3: Output Validator
             validation = validate_output(full_answer)
             if not validation.safe:
                 logger.warning(
