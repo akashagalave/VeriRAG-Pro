@@ -28,14 +28,24 @@ from backend.redis_cache import (
 )
 from backend.security import check_input, validate_output
 from backend.vector_store import add_paper, collection_stats, get_collection_name, list_papers
+from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
 _rate = os.getenv("RATE_LIMIT_PER_MINUTE", "30")
 _redis_url = os.getenv("REDIS_URL", "")
 
+
+
+def get_client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+
+    if xff:
+        return xff.split(",")[0].strip()
+
+    return request.client.host or "unknown"
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=get_client_ip,
     storage_uri=_redis_url if _redis_url else "memory://",
 )
 
