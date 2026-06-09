@@ -11,13 +11,6 @@ spec:
   rules:
     - http:
         paths:
-          - path: /api
-            pathType: Prefix
-            backend:
-              service:
-                name: verirag-fastapi-service
-                port:
-                  number: 8000
           - path: /
             pathType: Prefix
             backend:
