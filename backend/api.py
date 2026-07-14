@@ -8,6 +8,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Optional
+import asyncio
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -206,6 +207,8 @@ async def session_history(session_id: str):
             ))
     return chats
 
+ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
+MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  
 
 @app.post(
     "/sessions/{session_id}/ingest",
@@ -233,13 +236,23 @@ async def ingest(
 
     try:
         deduplicated = False
+        docs = None
 
         if file:
-            raw_bytes = await file.read()
-            doc_hash = compute_document_hash(raw_bytes)
+            suffix = Path(file.filename or "").suffix.lower()
+            if suffix not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    422, f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}"
+                )
+            raw_bytes = await file.read(MAX_FILE_SIZE_BYTES + 1)
+            if len(raw_bytes) > MAX_FILE_SIZE_BYTES:
+                raise HTTPException(
+                    413, f"File exceeds max size of {MAX_FILE_SIZE_BYTES // (1024*1024)} MB."
+                )
 
-            #Redis deduplication check
-            if is_document_indexed(doc_hash, session_id):
+            doc_hash = compute_document_hash(raw_bytes)
+            claimed = is_document_indexed(doc_hash, session_id)
+            if claimed:
                 return IngestResponse(
                     session_id=session_id,
                     message="Document already indexed — skipped (dedup cache hit).",
@@ -247,20 +260,20 @@ async def ingest(
                     deduplicated=True,
                 )
 
-            suffix = Path(file.filename).suffix
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     tmp.write(raw_bytes)
                     tmp_path = tmp.name
-                docs = load_document(tmp_path)
+
+                docs = await asyncio.to_thread(load_document, tmp_path)
                 for doc in docs:
                     doc.metadata.setdefault("title", Path(file.filename).stem)
             finally:
                 if tmp_path:
                     Path(tmp_path).unlink(missing_ok=True)
 
-            add_paper(docs, session_id)
+            await asyncio.to_thread(add_paper, docs, session_id)
             mark_document_indexed(
                 doc_hash, session_id,
                 chunk_count=len(docs),
@@ -268,12 +281,12 @@ async def ingest(
             )
 
         elif url:
-            docs = load_webpage(url.strip())
-            add_paper(docs, session_id)
+            docs = await asyncio.to_thread(load_webpage, url.strip())
+            await asyncio.to_thread(add_paper, docs, session_id)
 
         else:
-            docs = load_arxiv(arxiv_query.strip())
-            add_paper(docs, session_id)
+            docs = await asyncio.to_thread(load_arxiv, arxiv_query.strip())
+            await asyncio.to_thread(add_paper, docs, session_id)
 
         return IngestResponse(
             session_id=session_id,
@@ -282,11 +295,13 @@ async def ingest(
             deduplicated=deduplicated,
         )
 
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    except Exception as exc:
+    except Exception:
         logger.exception("Ingest failed for session %s", session_id)
-        raise HTTPException(500, f"Ingest failed: {exc}")
+        raise HTTPException(500, "Ingest failed. Please try again or contact support.")
 
 
 @app.post(
