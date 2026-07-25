@@ -166,11 +166,3 @@ jobs:
         run: |
           kubectl rollout status deployment/verirag-backend  -n verirag --timeout=120s
           kubectl rollout status deployment/verirag-frontend -n verirag --timeout=120s
-
-      - name: Verify deployment health
-        run: |
-          sleep 35
-          kubectl get pods -n verirag
-          BACKEND_URL=$(kubectl get svc verirag-fastapi-service -n verirag \
-            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          curl -sf "http://$BACKEND_URL:8000/health" || echo "Health check failed — check pod logs"
