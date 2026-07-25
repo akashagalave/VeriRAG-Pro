@@ -1,11 +1,9 @@
-
 import argparse
 import json
 import logging
 import os
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -31,32 +29,33 @@ from deepeval.test_case import LLMTestCase
 
 from backend.paper_loader import load_document
 from backend.rag_graph import build_graph
-from backend.vector_store import add_paper
+from backend.vector_store import add_paper, get_collection_name, qdrant_client
 import sqlite3
 from langgraph.checkpoint.sqlite import SqliteSaver
 load_dotenv()
 
-# ── Configuration ─────────────────────────────────────────────────────────────
 
 PDF_PATH             = "documents/Openclaw_Research_Report.pdf"
 GOLDENS_FILE         = Path("goldens.json")
 RESULTS_FILE         = Path("eval_results.json")
 BASELINE_FILE        = Path("eval_baseline.json")
-SUMMARY_FILE         = Path("eval_summary.md")   # written in CI mode
+SUMMARY_FILE         = Path("eval_summary.md")  
 
 MAX_CONTEXTS         = 5
 GOLDENS_PER_CONTEXT  = 2
 METRIC_THRESHOLD     = 0.7
 JUDGE_MODEL          = "gpt-4o-mini"
 
-# Metrics where a drop of more than this delta blocks deployment
-REGRESSION_TOLERANCE = 0.05   # 5 percentage points
+REGRESSION_TOLERANCE = 0.05   
 
-# Metrics that must NEVER drop below threshold (hard gates)
+
 HARD_GATE_METRICS = {"Faithfulness", "Answer Relevancy"}
 
+EVAL_SESSION_ID = "eval_fixed_session"
 
-# ── Golden generation ─────────────────────────────────────────────────────────
+RETRIEVAL_BIAS_SUFFIX = " as per the report in knowledge base"
+
+
 
 def generate_goldens() -> list[dict]:
     synthesizer = Synthesizer()
@@ -82,7 +81,23 @@ def load_goldens() -> list[dict]:
     return json.loads(GOLDENS_FILE.read_text(encoding="utf-8"))
 
 
-# ── RAG pipeline runner ───────────────────────────────────────────────────────
+
+def reset_eval_collection(session_id: str) -> None:
+    collection_name = get_collection_name(session_id)
+    if qdrant_client.collection_exists(collection_name):
+        qdrant_client.delete_collection(collection_name)
+        logger.info("Deleted stale eval collection: %s", collection_name)
+
+
+def cleanup_eval_collection(session_id: str) -> None:
+    collection_name = get_collection_name(session_id)
+    try:
+        if qdrant_client.collection_exists(collection_name):
+            qdrant_client.delete_collection(collection_name)
+            logger.info("Cleaned up eval collection: %s", collection_name)
+    except Exception as exc:
+        logger.warning("Could not clean up eval collection %s: %s", collection_name, exc)
+
 
 def run_rag_query(graph, query: str, session_id: str) -> tuple[str, list[str]]:
     config = {"configurable": {"thread_id": session_id}}
@@ -104,13 +119,7 @@ def run_rag_query(graph, query: str, session_id: str) -> tuple[str, list[str]]:
     return answer, retrieval_context
 
 
-# ── Score extraction ──────────────────────────────────────────────────────────
-
 def extract_scores(results) -> dict[str, float]:
-    """
-    Aggregate metric scores across all test cases.
-    Returns {metric_name: average_score}.
-    """
     score_buckets: dict[str, list[float]] = {}
     for test_result in results.test_results:
         for m in test_result.metrics_data:
@@ -118,30 +127,21 @@ def extract_scores(results) -> dict[str, float]:
     return {name: sum(scores) / len(scores) for name, scores in score_buckets.items()}
 
 
-# ── Regression detection ──────────────────────────────────────────────────────
-
 def detect_regression(
     current_scores: dict[str, float],
     baseline_scores: dict[str, float],
 ) -> list[str]:
-    """
-    Returns a list of regression messages (empty list = no regression).
-
-    Regression rules:
-      1. Any HARD_GATE metric below METRIC_THRESHOLD → regression.
-      2. Any metric drops more than REGRESSION_TOLERANCE vs baseline → regression.
-    """
+    
     failures: list[str] = []
 
     for metric, score in current_scores.items():
-        # Hard gate: must stay above threshold
         if metric in HARD_GATE_METRICS and score < METRIC_THRESHOLD:
             failures.append(
                 f"HARD GATE FAIL — {metric}: {score:.3f} < threshold {METRIC_THRESHOLD}"
             )
             continue
 
-        # Regression vs baseline
+       
         baseline = baseline_scores.get(metric)
         if baseline is not None:
             drop = baseline - score
@@ -154,7 +154,6 @@ def detect_regression(
     return failures
 
 
-# ── Markdown summary (for GitHub Actions) ────────────────────────────────────
 
 def write_summary(
     current_scores: dict[str, float],
@@ -205,15 +204,12 @@ def write_summary(
                 f.write(summary_text)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="VeriRAG DeepEval regression pipeline")
     parser.add_argument("--ci",       action="store_true", help="CI/CD mode — exit 1 on regression")
     parser.add_argument("--generate", action="store_true", help="Regenerate golden pairs from PDF")
     args = parser.parse_args()
 
-    # Load or generate goldens
     if args.generate or not GOLDENS_FILE.exists():
         pairs = generate_goldens()
     else:
@@ -221,7 +217,6 @@ def main() -> int:
 
     logger.info("Running evaluation on %d golden pairs…", len(pairs))
 
-    # Load baseline scores
     baseline_scores: dict[str, float] = {}
     if BASELINE_FILE.exists():
         try:
@@ -230,89 +225,83 @@ def main() -> int:
         except Exception as exc:
             logger.warning("Could not load baseline: %s", exc)
 
-    # Build graph and load docs into a SINGLE shared eval session
-    
+    reset_eval_collection(EVAL_SESSION_ID)
 
-    
     docs = load_document(PDF_PATH)
-    # graph = build_graph(db_path="eval_checkpoints.db")
     _eval_conn = sqlite3.connect("eval_checkpoints.db", check_same_thread=False)
     _eval_checkpointer = SqliteSaver(_eval_conn)
     graph = build_graph(checkpointer=_eval_checkpointer)
-    eval_session_id = f"eval_{uuid4().hex}"
-    add_paper(docs, eval_session_id)
-    logger.info("Evaluation session: %s (%d chunks)", eval_session_id, len(docs))
+    add_paper(docs, EVAL_SESSION_ID)
+    logger.info("Evaluation session: %s (%d chunks)", EVAL_SESSION_ID, len(docs))
 
-    # Build metrics
-    metrics = [
-        ContextualPrecisionMetric(threshold=METRIC_THRESHOLD,  model=JUDGE_MODEL),
-        ContextualRecallMetric(threshold=METRIC_THRESHOLD,     model=JUDGE_MODEL),
-        ContextualRelevancyMetric(threshold=METRIC_THRESHOLD,  model=JUDGE_MODEL),
-        AnswerRelevancyMetric(threshold=METRIC_THRESHOLD,      model=JUDGE_MODEL),
-        FaithfulnessMetric(threshold=METRIC_THRESHOLD,         model=JUDGE_MODEL),
-    ]
+    try:
+        metrics = [
+            ContextualPrecisionMetric(threshold=METRIC_THRESHOLD,  model=JUDGE_MODEL),
+            ContextualRecallMetric(threshold=METRIC_THRESHOLD,     model=JUDGE_MODEL),
+            ContextualRelevancyMetric(threshold=METRIC_THRESHOLD,  model=JUDGE_MODEL),
+            AnswerRelevancyMetric(threshold=METRIC_THRESHOLD,      model=JUDGE_MODEL),
+            FaithfulnessMetric(threshold=METRIC_THRESHOLD,         model=JUDGE_MODEL),
+        ]
 
-    # Build test cases
-    test_cases: list[LLMTestCase] = []
-    for pair in pairs:
-        query = pair["input"] + " as per the report in knowledge base"
-        answer, retrieval_context = run_rag_query(graph, query, eval_session_id)
-        test_cases.append(LLMTestCase(
-            input=pair["input"],
-            actual_output=answer,
-            expected_output=pair["expected_output"],
-            retrieval_context=retrieval_context,
-        ))
-
-    # Run evaluation
-    results = evaluate(
-        test_cases,
-        metrics,
-        async_config=AsyncConfig(max_concurrent=3, throttle_value=5),
-    )
-
-    # Save full results
-    summary_rows = []
-    for test_result in results.test_results:
-        summary_rows.append({
-            "input": test_result.input,
-            "actual_output": test_result.actual_output,
-            "success": test_result.success,
-            "metrics": [
-                {
-                    "name": m.name,
-                    "score": m.score,
-                    "passed": m.success,
-                    "reason": m.reason,
-                }
-                for m in test_result.metrics_data
-            ],
-        })
-    RESULTS_FILE.write_text(
-        json.dumps(summary_rows, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    logger.info("Full results saved → %s", RESULTS_FILE)
-
-  
-    current_scores = extract_scores(results)
-    failures = detect_regression(current_scores, baseline_scores)
+        test_cases: list[LLMTestCase] = []
+        for pair in pairs:
+            asked_query = pair["input"] + RETRIEVAL_BIAS_SUFFIX
+            answer, retrieval_context = run_rag_query(graph, asked_query, EVAL_SESSION_ID)
+            test_cases.append(LLMTestCase(
+                input=asked_query,             
+                actual_output=answer,
+                expected_output=pair["expected_output"],
+                retrieval_context=retrieval_context,
+            ))
 
 
-    write_summary(current_scores, baseline_scores, failures, ci_mode=args.ci)
+        results = evaluate(
+            test_cases,
+            metrics,
+            async_config=AsyncConfig(max_concurrent=3, throttle_value=5),
+        )
 
-    if failures:
-        logger.error("EVALUATION GATE FAILED — %d regression(s) detected:", len(failures))
-        for f in failures:
-            logger.error("  %s", f)
-        return 1
+        summary_rows = []
+        for test_result in results.test_results:
+            summary_rows.append({
+                "input": test_result.input,
+                "actual_output": test_result.actual_output,
+                "success": test_result.success,
+                "metrics": [
+                    {
+                        "name": m.name,
+                        "score": m.score,
+                        "passed": m.success,
+                        "reason": m.reason,
+                    }
+                    for m in test_result.metrics_data
+                ],
+            })
+        RESULTS_FILE.write_text(
+            json.dumps(summary_rows, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.info("Full results saved → %s", RESULTS_FILE)
 
-  
-    BASELINE_FILE.write_text(
-        json.dumps(current_scores, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    logger.info("Baseline updated → %s", BASELINE_FILE)
-    logger.info("✅ Evaluation passed. Safe to deploy.")
-    return 0
+        current_scores = extract_scores(results)
+        failures = detect_regression(current_scores, baseline_scores)
+
+        write_summary(current_scores, baseline_scores, failures, ci_mode=args.ci)
+
+        if failures:
+            logger.error("EVALUATION GATE FAILED — %d regression(s) detected:", len(failures))
+            for f in failures:
+                logger.error("  %s", f)
+            return 1
+
+        BASELINE_FILE.write_text(
+            json.dumps(current_scores, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.info("Baseline updated → %s", BASELINE_FILE)
+        logger.info("✅ Evaluation passed. Safe to deploy.")
+        return 0
+
+    finally:
+        cleanup_eval_collection(EVAL_SESSION_ID)
 
 
 if __name__ == "__main__":
