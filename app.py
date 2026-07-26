@@ -1,18 +1,3 @@
-"""
-app.py
-------
-Streamlit frontend for VeriRAG.
-
-What this file does:
-  - Session sidebar (new chat, switch sessions, auto-naming)
-  - Document upload (PDF / URL / ArXiv) via FastAPI
-  - Chat interface with token streaming
-  - Sources expander per turn (retrieved chunks)
-  - /btw side channel (local, not saved to history)
-
-All AI logic lives in backend/api.py (FastAPI).
-This file only handles UI and calls the API via httpx.
-"""
 
 import json
 import uuid
@@ -33,17 +18,12 @@ st.set_page_config(page_title="VeriRAG", page_icon="📚", layout="centered")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 SESSIONS_FILE = Path("sessions.json")
 
-# Used only for generating session names — pure UI logic
 _rename_llm = ChatOpenAI(model="gpt-4o-mini")
 
-
-# ── HTTP client ───────────────────────────────────────────────────────────────
 
 def _client() -> httpx.Client:
     return httpx.Client(base_url=BACKEND_URL, timeout=120.0)
 
-
-# ── Session helpers ───────────────────────────────────────────────────────────
 
 def load_sessions() -> dict:
     try:
@@ -97,6 +77,14 @@ def maybe_rename_session(session_id: str, first_message: str) -> None:
     save_sessions(st.session_state.sessions_meta)
 
 
+def get_upstream_client_ip() -> str:
+    headers = st.context.headers
+    xff = headers.get("X-Forwarded-For") or headers.get("x-forwarded-for") or ""
+    if xff:
+        return xff.split(",")[0].strip()
+    return "unknown"
+
+
 def load_session_chats(session_id: str) -> list[dict]:
     """Reload past messages from FastAPI backend when switching sessions."""
     try:
@@ -120,7 +108,6 @@ def switch_session(session_id: str) -> None:
         st.session_state.turns[session_id] = turn_count
 
 
-# ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 if "sessions_meta" not in st.session_state:
     st.session_state.sessions_meta = load_sessions()
@@ -142,7 +129,6 @@ if "active_session_id" not in st.session_state:
 active_sid = st.session_state.active_session_id
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     if st.button("+ New Chat", use_container_width=True):
@@ -176,7 +162,6 @@ with st.sidebar:
     st.divider()
     st.markdown("## 📄 Documents")
 
-    # ── File upload ────────────────────────────────────────────────────────────
     st.markdown("**Upload Files**")
     uploaded_files = st.file_uploader(
         "PDF, TXT, or Markdown",
@@ -213,7 +198,6 @@ with st.sidebar:
         else:
             st.warning("No files selected.")
 
-    # ── Web URL loader ─────────────────────────────────────────────────────────
     st.markdown("**Web Pages**")
     url_input = st.text_area(
         "URLs (one per line)",
@@ -244,7 +228,6 @@ with st.sidebar:
         else:
             st.warning("Enter at least one URL.")
 
-    # ── ArXiv loader ───────────────────────────────────────────────────────────
     st.markdown("**ArXiv Papers**")
     arxiv_title = st.text_input(
         "Paper title or ArXiv ID",
@@ -272,7 +255,6 @@ with st.sidebar:
         else:
             st.warning("Enter a paper title or ArXiv ID.")
 
-    # ── Loaded Documents list ──────────────────────────────────────────────────
     st.divider()
     st.markdown("### Loaded Documents")
     try:
@@ -297,7 +279,6 @@ with st.sidebar:
         st.caption("No documents loaded yet.")
 
 
-# ── Page header ───────────────────────────────────────────────────────────────
 
 st.title("📚 VeriRAG — Agentic Research Intelligence")
 st.markdown(
@@ -309,7 +290,6 @@ st.markdown(
 st.divider()
 
 
-# ── Chat display — render existing messages ───────────────────────────────────
 
 for msg in st.session_state.chats.get(active_sid, []):
     with st.chat_message(msg["role"]):
@@ -331,15 +311,11 @@ for msg in st.session_state.chats.get(active_sid, []):
                         st.markdown(f"**{i}. {label}**")
                         st.caption(src["content"][:300])
 
-
-# ── /btw side channel ─────────────────────────────────────────────────────────
-
 def _handle_btw_locally(query: str):
     from backend.btw_handler import handle_btw
     yield from handle_btw(query)
 
 
-# ── Chat input ────────────────────────────────────────────────────────────────
 
 if prompt := st.chat_input("Ask about your papers, verify a claim, or search the web…"):
     is_btw = prompt.strip().lower().startswith("/btw")
@@ -363,8 +339,6 @@ if prompt := st.chat_input("Ask about your papers, verify a claim, or search the
                     placeholder.markdown(response_text + "▌")
                 placeholder.markdown(response_text)
             st.caption("Side channel — not saved to session history.")
-
-    # ── Normal RAG path ───────────────────────────────────────────────────────
     else:
         if active_sid not in st.session_state.chats:
             st.session_state.chats[active_sid] = []
@@ -388,11 +362,13 @@ if prompt := st.chat_input("Ask about your papers, verify a claim, or search the
             error_msg: str | None = None
 
             try:
+                client_ip = get_upstream_client_ip()
                 with httpx.Client(base_url=BACKEND_URL, timeout=120.0) as client:
                     with client.stream(
                         "POST",
                         f"/sessions/{active_sid}/query",
                         json={"question": prompt},
+                        headers={"X-Forwarded-For": client_ip},
                     ) as stream_resp:
                         stream_resp.raise_for_status()
                         for raw_line in stream_resp.iter_lines():
