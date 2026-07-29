@@ -358,7 +358,7 @@ async def query_session(
         route: str = "unknown"
 
         try:
-            for chunk, metadata in graph.stream(
+            async for chunk, metadata in graph.stream(
                 input_state, config, stream_mode="messages"
             ):
                 if (
@@ -369,7 +369,7 @@ async def query_session(
                     full_answer += chunk.content
                     yield json.dumps({"type": "token", "data": chunk.content}) + "\n"
 
-            final_values = graph.get_state(config).values
+            final_values = (await graph.aget_state(config)).values 
             route = final_values.get("route") or "unknown"
 
             retrieved_docs = final_values.get("retrieved_docs") or []
