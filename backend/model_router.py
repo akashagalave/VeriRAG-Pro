@@ -112,7 +112,7 @@ def _build_providers() -> list[_Provider]:
             from langchain_openai import ChatOpenAI
             providers.append(_Provider(
                 name="openai-gpt-4o-mini",
-                llm=ChatOpenAI(model="gpt-4o-mini", temperature=0, request_timeout=30),
+                llm=ChatOpenAI(model="gpt-4o-mini", temperature=0, request_timeout=30,streaming=True),
                 circuit_breaker=CircuitBreaker(name="openai"),
             ))
             logger.info("Model router: registered openai-gpt-4o-mini (primary)")
