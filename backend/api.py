@@ -222,6 +222,7 @@ MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
     ),
     status_code=status.HTTP_201_CREATED,
 )
+@limiter.limit(os.getenv("INGEST_RATE_LIMIT", "5/minute"))
 async def ingest(
     request: Request,
     session_id: str,
