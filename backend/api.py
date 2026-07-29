@@ -223,6 +223,7 @@ MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
     status_code=status.HTTP_201_CREATED,
 )
 async def ingest(
+    request: Request,
     session_id: str,
     file: Optional[UploadFile] = File(default=None),
     url: Optional[str] = Form(default=None),
