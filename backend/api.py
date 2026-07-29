@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 
+import asyncio
 import json
 import logging
 import os
@@ -8,7 +10,6 @@ import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Optional
-import asyncio
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +18,6 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from backend.model_router import get_circuit_breaker_status
 from backend.paper_loader import load_arxiv, load_document, load_webpage
@@ -28,8 +28,12 @@ from backend.redis_cache import (
     mark_document_indexed,
 )
 from backend.security import check_input, validate_output
-from backend.vector_store import add_paper, collection_stats, get_collection_name, list_papers
-from fastapi import Request
+from backend.vector_store import (
+    add_paper,
+    collection_stats,
+    get_collection_name,
+    list_papers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +41,13 @@ _rate = os.getenv("RATE_LIMIT_PER_MINUTE", "30")
 _redis_url = os.getenv("REDIS_URL", "")
 
 
-
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
-
     if xff:
         return xff.split(",")[0].strip()
-
     return request.client.host or "unknown"
+
+
 limiter = Limiter(
     key_func=get_client_ip,
     storage_uri=_redis_url if _redis_url else "memory://",
@@ -52,31 +55,68 @@ limiter = Limiter(
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 
-if DATABASE_URL:
-    import psycopg
-    from langgraph.checkpoint.postgres import PostgresSaver
-    _pg_conn = psycopg.connect(DATABASE_URL, autocommit=True)
-    checkpointer = PostgresSaver(_pg_conn)
-    checkpointer.setup() 
-    logger.info("Checkpointer: PostgreSQL (shared sessions across all pods)")
-else:
-    import sqlite3
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    _db_path = os.getenv("CHECKPOINT_DB", "checkpoints.db")
-    _sqlite_conn = sqlite3.connect(_db_path, check_same_thread=False)
-    checkpointer = SqliteSaver(_sqlite_conn)
-    logger.info("Checkpointer: SQLite at %s (local dev — breaks with 2+ pods)", _db_path)
-
 _graph = None
+_pool = None               
+_checkpointer_cm = None    
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _graph
+    global _graph, _pool, _checkpointer_cm
+
+    if DATABASE_URL:
+        from psycopg.rows import dict_row
+        from psycopg_pool import AsyncConnectionPool
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        _pool = AsyncConnectionPool(
+            conninfo=DATABASE_URL,
+            min_size=2,
+            max_size=10,
+            open=False,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": dict_row,
+            },
+        )
+
+        for attempt in range(1, 11):
+            try:
+                await _pool.open(wait=True, timeout=10)
+                break
+            except Exception as exc:
+                logger.warning("Postgres not ready (attempt %d/10): %s", attempt, exc)
+                await asyncio.sleep(min(2**attempt, 15))
+        else:
+            raise RuntimeError("Could not connect to Postgres after 10 attempts.")
+
+        checkpointer = AsyncPostgresSaver(_pool)
+        await checkpointer.setup()
+        logger.info(
+            "Checkpointer: AsyncPostgresSaver (pooled, shared sessions across all pods)"
+        )
+    else:
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+        _db_path = os.getenv("CHECKPOINT_DB", "checkpoints.db")
+        _checkpointer_cm = AsyncSqliteSaver.from_conn_string(_db_path)
+        checkpointer = await _checkpointer_cm.__aenter__()
+        logger.info(
+            "Checkpointer: AsyncSqliteSaver at %s (local dev — breaks with 2+ pods)",
+            _db_path,
+        )
+
     logger.info("Building LangGraph…")
     _graph = build_graph(checkpointer=checkpointer)
     logger.info("LangGraph ready.")
+
     yield
+
+    if _pool is not None:
+        await _pool.close()
+    if _checkpointer_cm is not None:
+        await _checkpointer_cm.__aexit__(None, None, None)
     logger.info("VeriRAG FastAPI shutdown.")
 
 
@@ -118,7 +158,9 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     question: str = Field(
-        ..., min_length=1, max_length=2000,
+        ...,
+        min_length=1,
+        max_length=2000,
         description="Natural-language question, claim to verify, or general query.",
     )
 
@@ -185,11 +227,12 @@ async def session_history(session_id: str):
     graph = get_graph()
     config = {"configurable": {"thread_id": session_id}}
     try:
-        state = graph.get_state(config)
+        state = await graph.aget_state(config)
         if not state or not state.values:
             return []
     except Exception:
-        return []
+        logger.exception("Failed to load history for session %s", session_id)
+        raise HTTPException(503, "History temporarily unavailable. Please retry.")
 
     messages = state.values.get("messages", [])
     chats: list[ChatMessage] = []
@@ -201,14 +244,20 @@ async def session_history(session_id: str):
         elif type_name in ("AIMessage", "AIMessageChunk"):
             if not content.strip():
                 continue
-            chats.append(ChatMessage(
-                role="assistant", content=content,
-                sources=[], route=state.values.get("route"),
-            ))
+            chats.append(
+                ChatMessage(
+                    role="assistant",
+                    content=content,
+                    sources=[],
+                    route=state.values.get("route"),
+                )
+            )
     return chats
 
+
 ALLOWED_EXTENSIONS = {".pdf", ".txt", ".md"}
-MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  
+MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+
 
 @app.post(
     "/sessions/{session_id}/ingest",
@@ -218,7 +267,9 @@ MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
     description=(
         "Accepts a file upload (PDF / TXT / MD), a URL, or an arXiv ID / title.\n\n"
         "**Redis deduplication**: SHA-256 of raw bytes is checked before embedding. "
-        "Duplicate documents are skipped — no redundant OpenAI calls across pods."
+        "Duplicate documents are skipped — no redundant OpenAI calls across pods.\n\n"
+        "**Rate limited** more strictly than /query: one ingest is ~90 embedding "
+        "calls and 12–15s of blocking work, versus ~5 LLM calls for a query."
     ),
     status_code=status.HTTP_201_CREATED,
 )
@@ -244,12 +295,15 @@ async def ingest(
             suffix = Path(file.filename or "").suffix.lower()
             if suffix not in ALLOWED_EXTENSIONS:
                 raise HTTPException(
-                    422, f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}"
+                    422,
+                    f"Unsupported file type '{suffix}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
                 )
+
             raw_bytes = await file.read(MAX_FILE_SIZE_BYTES + 1)
             if len(raw_bytes) > MAX_FILE_SIZE_BYTES:
                 raise HTTPException(
-                    413, f"File exceeds max size of {MAX_FILE_SIZE_BYTES // (1024*1024)} MB."
+                    413,
+                    f"File exceeds max size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
                 )
 
             doc_hash = compute_document_hash(raw_bytes)
@@ -267,7 +321,6 @@ async def ingest(
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     tmp.write(raw_bytes)
                     tmp_path = tmp.name
-
                 docs = await asyncio.to_thread(load_document, tmp_path)
                 for doc in docs:
                     doc.metadata.setdefault("title", Path(file.filename).stem)
@@ -277,7 +330,8 @@ async def ingest(
 
             await asyncio.to_thread(add_paper, docs, session_id)
             mark_document_indexed(
-                doc_hash, session_id,
+                doc_hash,
+                session_id,
                 chunk_count=len(docs),
                 collection_name=get_collection_name(session_id),
             )
@@ -311,14 +365,14 @@ async def ingest(
     tags=["query"],
     summary="Run the RAG pipeline (streaming)",
     description=(
-        "Streams the answer token-by-token.\n\n"
+        "Streams the answer as newline-delimited JSON.\n\n"
         "**Security**: Input is checked for prompt injection before the graph runs. "
         "Output is scanned for PII before the `done` event is sent.\n\n"
         "**Stream protocol** (newline-delimited JSON):\n"
         "```\n"
-        "{\"type\": \"token\", \"data\": \"text chunk\"}\n"
-        "{\"type\": \"done\",  \"data\": {\"answer\": \"...\", \"route\": \"retrieve\", \"sources\": [...]}}\n"
-        "{\"type\": \"error\", \"data\": \"error message\"}\n"
+        '{"type": "token", "data": "text chunk"}\n'
+        '{"type": "done",  "data": {"answer": "...", "route": "retrieve", "sources": [...]}}\n'
+        '{"type": "error", "data": "error message"}\n'
         "```"
     ),
     response_class=StreamingResponse,
@@ -331,7 +385,7 @@ async def query_session(
 ):
     graph = get_graph()
 
-    # ── Layer 1: Input Guardrail 
+
     guardrail = check_input(body.question)
     if not guardrail.safe:
         raise HTTPException(
@@ -355,12 +409,12 @@ async def query_session(
             "is_relevant": None,
             "rewrite_count": 0,
         }
-
         full_answer: str = ""
         route: str = "unknown"
 
         try:
-            async for chunk, metadata in graph.stream(
+
+            async for chunk, metadata in graph.astream(
                 input_state, config, stream_mode="messages"
             ):
                 if (
@@ -371,9 +425,8 @@ async def query_session(
                     full_answer += chunk.content
                     yield json.dumps({"type": "token", "data": chunk.content}) + "\n"
 
-            final_values = (await graph.aget_state(config)).values 
+            final_values = (await graph.aget_state(config)).values
             route = final_values.get("route") or "unknown"
-
             retrieved_docs = final_values.get("retrieved_docs") or []
             sources = [
                 {"content": doc.page_content[:500], "metadata": doc.metadata}
@@ -383,26 +436,33 @@ async def query_session(
             if not full_answer:
                 full_answer = final_values.get("answer") or ""
 
-            #Layer 3: Output Validator
             validation = validate_output(full_answer)
             if not validation.safe:
                 logger.warning(
                     "PII redacted in output for session %s — types: %s",
-                    session_id, validation.pii_types,
+                    session_id,
+                    validation.pii_types,
                 )
             safe_answer = validation.redacted_output or full_answer
 
-            yield json.dumps({
-                "type": "done",
-                "data": {
-                    "answer": safe_answer,
-                    "route": route,
-                    "sources": sources,
-                },
-            }) + "\n"
+            yield json.dumps(
+                {
+                    "type": "done",
+                    "data": {
+                        "answer": safe_answer,
+                        "route": route,
+                        "sources": sources,
+                    },
+                }
+            ) + "\n"
 
-        except Exception as exc:
+        except Exception:
             logger.exception("Stream failed for session %s", session_id)
-            yield json.dumps({"type": "error", "data": str(exc)}) + "\n"
+            yield json.dumps(
+                {
+                    "type": "error",
+                    "data": "The request failed while generating a response. Please retry.",
+                }
+            ) + "\n"
 
     return StreamingResponse(_stream(), media_type="application/x-ndjson")
