@@ -239,10 +239,12 @@ with st.sidebar:
         if arxiv_title.strip():
             with st.spinner("Loading from ArXiv…"):
                 try:
+                    client_ip = get_upstream_client_ip()
                     with _client() as client:
                         resp = client.post(
                             f"/sessions/{active_sid}/ingest",
                             data={"arxiv_query": arxiv_title.strip()},
+                            headers={"X-Forwarded-For": client_ip},
                         )
                     resp.raise_for_status()
                     data = resp.json()
