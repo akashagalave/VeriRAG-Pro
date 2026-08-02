@@ -22,6 +22,12 @@ from backend.model_router import get_primary_llm, invoke_with_fallback
 from backend.models import ClaimVerificationResult, RelevancyDecision, RouterDecision
 from backend.security import sanitize_context
 from backend.vector_store import search as vs_search
+# rag_graph.py ke top pe (2 lines)
+import logging
+from typing import get_args
+logger = logging.getLogger(__name__)
+
+_VALID_ROUTES = frozenset(get_args(RouterDecision.model_fields["route"].annotation))
 
 _LS_PROJECT = os.getenv("LANGSMITH_PROJECT", "LangGraph-Database-Backend")
 
@@ -76,11 +82,22 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
 def router_node(state: RAGState) -> dict:
     """Classify query → retrieve | verify_claim | direct_answer."""
     query = state["messages"][-1].content
-    decision: RouterDecision = invoke_with_fallback(
-        ROUTER_PROMPT.format_messages(query=query),
-        structured_output_schema=RouterDecision,
-    )
-    return {"route": decision.route}
+
+    try:
+        decision: RouterDecision = invoke_with_fallback(
+            ROUTER_PROMPT.format_messages(query=query),
+            structured_output_schema=RouterDecision,
+        )
+        route = decision.route
+    except Exception as exc:
+        logger.warning("Router failed (%s) — defaulting to retrieve", exc)
+        return {"route": "retrieve"}                    
+
+    if route not in _VALID_ROUTES:
+        logger.warning("Router gave invalid route %r — defaulting to retrieve", route)
+        return {"route": "retrieve"}     
+
+    return {"route": route}
 
 
 class RetrieverInput(BaseModel):
