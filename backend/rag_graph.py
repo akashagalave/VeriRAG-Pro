@@ -80,7 +80,6 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages([
     metadata={"project": _LS_PROJECT},
 )
 def router_node(state: RAGState) -> dict:
-    """Classify query → retrieve | verify_claim | direct_answer."""
     query = state["messages"][-1].content
 
     try:
