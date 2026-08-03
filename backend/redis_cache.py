@@ -22,11 +22,6 @@ _client_initialized = False
 
 
 def _get_client():
-    """
-    Lazy-initialise Redis client on first call.
-    Returns None if REDIS_URL is not set or connection fails.
-    Subsequent calls return the cached client (or None if init failed).
-    """
     global _client, _client_initialized
 
     if _client_initialized:
@@ -43,7 +38,7 @@ def _get_client():
         return None
 
     try:
-        import redis  # type: ignore
+        import redis  
 
         r = redis.from_url(
             redis_url,
@@ -68,31 +63,15 @@ def _get_client():
     return _client
 
 
-# ── Core public API ───────────────────────────────────────────────────────────
-
 def compute_document_hash(raw_bytes: bytes) -> str:
-    """
-    Compute SHA-256 of raw document bytes.
-    This is the deduplication key — content-addressable, not filename-based.
-    Same file uploaded twice (different name) → same hash → deduplicated.
-    """
     return hashlib.sha256(raw_bytes).hexdigest()
 
 
 def _make_key(session_id: str, doc_hash: str) -> str:
-    return f"{KEY_PREFIX}:{session_id}:{doc_hash}"
+    return f"{KEY_PREFIX}:{EMBEDDING_VERSION}:{session_id}:{doc_hash}"
 
 
 def is_document_indexed(doc_hash: str, session_id: str) -> bool:
-    """
-    Check whether this document has already been ingested for this session.
-
-    Returns:
-        True  → skip ingestion (already indexed)
-        False → proceed with ingestion (not indexed, or Redis unavailable)
-
-    Policy: FAIL OPEN — if Redis errors, return False (re-index to be safe).
-    """
     client = _get_client()
     if client is None:
         return False
@@ -117,12 +96,6 @@ def mark_document_indexed(
     chunk_count: int,
     collection_name: str,
 ) -> None:
-    """
-    Record that a document has been successfully indexed.
-    Called AFTER add_paper() succeeds — never before.
-
-    Policy: FAIL OPEN — silently logs and continues on any Redis error.
-    """
     client = _get_client()
     if client is None:
         return
@@ -147,10 +120,7 @@ def mark_document_indexed(
 
 
 def get_indexed_metadata(doc_hash: str, session_id: str) -> Optional[dict]:
-    """
-    Return the stored metadata dict for a cached document, or None.
-    Useful for diagnostics and the /info endpoint.
-    """
+
     client = _get_client()
     if client is None:
         return None
@@ -167,10 +137,6 @@ def get_indexed_metadata(doc_hash: str, session_id: str) -> Optional[dict]:
 
 
 def get_cache_stats() -> dict:
-    """
-    Return Redis INFO stats for Prometheus / the /metrics endpoint.
-    Returns empty dict if Redis is unavailable.
-    """
     client = _get_client()
     if client is None:
         return {}
@@ -187,11 +153,7 @@ def get_cache_stats() -> dict:
 
 
 def invalidate_session_cache(session_id: str) -> int:
-    """
-    Delete all cached document hashes for a session.
-    Useful if a session's Qdrant collection is reset.
-    Returns number of keys deleted.
-    """
+
     client = _get_client()
     if client is None:
         return 0
