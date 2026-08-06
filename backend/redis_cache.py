@@ -159,7 +159,7 @@ def invalidate_session_cache(session_id: str) -> int:
         return 0
 
     try:
-        pattern = f"{KEY_PREFIX}:{session_id}:*"
+        pattern = f"{KEY_PREFIX}:{EMBEDDING_VERSION}:{session_id}:*"
         keys = client.keys(pattern)
         if keys:
             deleted = client.delete(*keys)
