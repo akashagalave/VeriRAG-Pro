@@ -115,3 +115,34 @@ def load_document(source: str) -> list[Document]:
     if ext in (".md", ".markdown"):
         return load_markdown(source)
     raise ValueError(f"Unsupported file type: {ext}")
+
+
+
+"""
+
+User Uploads File
+        ↓
+Frontend
+        ↓
+POST /upload
+        ↓
+Backend receives file
+        ↓
+load_document(source)
+        ↓
+ ┌─────────────┬─────────────┬─────────────┬─────────────┐
+ │   .pdf      │    .txt     │    .md      │   https://  │
+ ▼             ▼             ▼             ▼
+load_pdf()  load_text()  load_markdown() load_webpage()
+        ↓
+Chunk Documents
+        ↓
+Embeddings
+        ↓
+Vector DB
+
+
+
+
+
+"""

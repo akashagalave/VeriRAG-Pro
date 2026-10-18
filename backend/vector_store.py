@@ -18,13 +18,13 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Constants
 
 EMBEDDING_DIM      = 1536
 DENSE_VECTOR_NAME  = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
-# ── Singletons ────────────────────────────────────────────────────────────────
+# ── Singletons
 
 base_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
@@ -65,7 +65,6 @@ qdrant_client = QdrantClient(
 )
 
 
-# ── Collection helpers ────────────────────────────────────────────────────────
 
 def get_collection_name(session_id: str) -> str:
     """Map a session UUID to a Qdrant collection name (hyphens → underscores)."""
@@ -130,7 +129,6 @@ def get_vectorstore(session_id: str) -> QdrantVectorStore:
     )
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
 
 def add_paper(docs: list[Document], session_id: str) -> None:
     """

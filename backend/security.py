@@ -257,3 +257,35 @@ def validate_output(llm_output: str) -> ValidationResult:
     except Exception as exc:
         logger.error("Output validator error (FAIL OPEN): %s", exc)
         return ValidationResult(safe=True, redacted_output=llm_output)
+
+
+
+
+
+
+"""
+                User Query
+                     │
+                     ▼
+          check_input()
+         (Layer 1 Security)
+                     │
+                     ▼
+             Retriever
+                     │
+                     ▼
+         sanitize_context()
+         (Layer 2 Security)
+                     │
+                     ▼
+                 LLM
+                     │
+                     ▼
+          validate_output()
+         (Layer 3 Security)
+                     │
+                     ▼
+                 User
+
+
+"""
