@@ -1,0 +1,24 @@
+services:
+  fastapi:
+    image: 372806411232.dkr.ecr.ap-south-1.amazonaws.com/verirag-backend:${IMAGE_TAG:?Set IMAGE_TAG to the approved Git commit SHA}
+    container_name: verirag-backend
+    ports:
+      - "8000:8000" # Restrict access with EC2 security groups; use a private backend ALB later.
+    env_file:
+      - .env # Provision on the backend instance; never commit this file.
+    environment:
+      CHECKPOINT_DB: /app/data/checkpoints.db # SQLite fallback only when DATABASE_URL is unset.
+    volumes:
+      - verirag_data:/app/data
+      - verirag_cache:/app/embedding_cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  verirag_data:
+  verirag_cache:
