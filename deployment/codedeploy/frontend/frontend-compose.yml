@@ -6,6 +6,7 @@ services:
       - "8501:8501"
     environment:
       BACKEND_URL: ${BACKEND_URL:?Set BACKEND_URL to the private backend address}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY from AWS Secrets Manager}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5)"]
