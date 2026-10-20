@@ -12,6 +12,8 @@ services:
       - .env
     environment:
       CHECKPOINT_DB: /app/data/checkpoints.db
+      LANGFUSE_TRACING_ENVIRONMENT: production
+      
     volumes:
       - verirag_data:/app/data
       - verirag_cache:/app/embedding_cache

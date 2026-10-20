@@ -15,10 +15,11 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, sta
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from langfuse import get_client, propagate_attributes
+from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-
 from backend.model_router import get_circuit_breaker_status
 from backend.paper_loader import load_arxiv, load_document, load_webpage
 from backend.rag_graph import build_graph
@@ -39,7 +40,8 @@ logger = logging.getLogger(__name__)
 
 _rate = os.getenv("RATE_LIMIT_PER_MINUTE", "30")
 _redis_url = os.getenv("REDIS_URL", "")
-
+langfuse = get_client()
+langfuse_handler = CallbackHandler()
 
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("x-forwarded-for")
@@ -378,13 +380,13 @@ async def ingest(
     response_class=StreamingResponse,
 )
 @limiter.limit(f"{_rate}/minute")
+
 async def query_session(
     request: Request,
     session_id: str,
     body: QueryRequest,
 ):
     graph = get_graph()
-
 
     guardrail = check_input(body.question)
     if not guardrail.safe:
@@ -394,7 +396,6 @@ async def query_session(
         )
 
     async def _stream() -> AsyncIterator[str]:
-        config = {"configurable": {"thread_id": session_id}}
         input_state = {
             "messages": [HumanMessage(content=body.question)],
             "session_id": session_id,
@@ -409,60 +410,216 @@ async def query_session(
             "is_relevant": None,
             "rewrite_count": 0,
         }
+
         full_answer: str = ""
         route: str = "unknown"
 
-        try:
+        # The observation must remain active throughout streaming.
+        with langfuse.start_as_current_observation(
+            as_type="span",
+            name="chat-response",
+            input=body.question,
+        ) as root_span:
 
-            async for chunk, metadata in graph.astream(
-                input_state, config, stream_mode="messages"
+            with propagate_attributes(
+                session_id=session_id,
+                trace_name="chat-response",
             ):
-                if (
-                    metadata.get("langgraph_node") == "generate_answer"
-                    and hasattr(chunk, "content")
-                    and chunk.content
-                ):
-                    full_answer += chunk.content
-                    yield json.dumps({"type": "token", "data": chunk.content}) + "\n"
-
-            final_values = (await graph.aget_state(config)).values
-            route = final_values.get("route") or "unknown"
-            retrieved_docs = final_values.get("retrieved_docs") or []
-            sources = [
-                {"content": doc.page_content[:500], "metadata": doc.metadata}
-                for doc in retrieved_docs
-            ]
-
-            if not full_answer:
-                full_answer = final_values.get("answer") or ""
-
-            validation = validate_output(full_answer)
-            if not validation.safe:
-                logger.warning(
-                    "PII redacted in output for session %s — types: %s",
-                    session_id,
-                    validation.pii_types,
-                )
-            safe_answer = validation.redacted_output or full_answer
-
-            yield json.dumps(
-                {
-                    "type": "done",
-                    "data": {
-                        "answer": safe_answer,
-                        "route": route,
-                        "sources": sources,
+                config = {
+                    "configurable": {
+                        "thread_id": session_id,
                     },
+                    "callbacks": [langfuse_handler], "run_name":"rag-graph",
                 }
-            ) + "\n"
 
-        except Exception:
-            logger.exception("Stream failed for session %s", session_id)
-            yield json.dumps(
-                {
-                    "type": "error",
-                    "data": "The request failed while generating a response. Please retry.",
-                }
-            ) + "\n"
+                try:
+                    async for chunk, metadata in graph.astream(
+                        input_state,
+                        config,
+                        stream_mode="messages",
+                    ):
+                        if (
+                            metadata.get("langgraph_node")
+                            == "generate_answer"
+                            and hasattr(chunk, "content")
+                            and isinstance(chunk.content, str)
+                            and chunk.content
+                        ):
+                            full_answer += chunk.content
 
-    return StreamingResponse(_stream(), media_type="application/x-ndjson")
+                            yield json.dumps({
+                                "type": "token",
+                                "data": chunk.content,
+                            }) + "\n"
+
+                    final_values = (
+                        await graph.aget_state(config)
+                    ).values
+
+                    route = (
+                        final_values.get("route") or "unknown"
+                    )
+
+                    retrieved_docs = (
+                        final_values.get("retrieved_docs") or []
+                    )
+
+                    sources = [
+                        {
+                            "content": doc.page_content[:500],
+                            "metadata": doc.metadata,
+                        }
+                        for doc in retrieved_docs
+                    ]
+
+                    if not full_answer:
+                        full_answer = (
+                            final_values.get("answer") or ""
+                        )
+
+                    validation = validate_output(full_answer)
+
+                    if not validation.safe:
+                        logger.warning(
+                            "PII redacted in output for session %s — types: %s",
+                            session_id,
+                            validation.pii_types,
+                        )
+
+                    safe_answer = (
+                        validation.redacted_output
+                        if validation.redacted_output is not None
+                        else full_answer
+                    )
+
+                    # Record the validated final answer for online evaluation.
+                    root_span.update(
+                        output=safe_answer,
+                        metadata={
+                            "route": route,
+                            "source_count": len(sources),
+                        },
+                    )
+
+                    yield json.dumps({
+                        "type": "done",
+                        "data": {
+                            "answer": safe_answer,
+                            "route": route,
+                            "sources": sources,
+                        },
+                    }) + "\n"
+
+                except Exception:
+                    logger.exception(
+                        "Stream failed for session %s",
+                        session_id,
+                    )
+
+                    root_span.update(
+                        output="Request failed",
+                        level="ERROR",
+                        status_message="RAG stream failed",
+                    )
+
+                    yield json.dumps({
+                        "type": "error",
+                        "data": (
+                            "The request failed while generating "
+                            "a response. Please retry."
+                        ),
+                    }) + "\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="application/x-ndjson",
+    )
+
+# async def query_session(
+#     request: Request,
+#     session_id: str,
+#     body: QueryRequest,
+# ):
+#     graph = get_graph()
+
+
+#     guardrail = check_input(body.question)
+#     if not guardrail.safe:
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail=guardrail.reason,
+#         )
+
+#     async def _stream() -> AsyncIterator[str]:
+#         config = {"configurable": {"thread_id": session_id}}
+#         input_state = {
+#             "messages": [HumanMessage(content=body.question)],
+#             "session_id": session_id,
+#             "query": body.question,
+#             "route": None,
+#             "retrieved_docs": [],
+#             "retrieval_attempts": 0,
+#             "claim_verdict": None,
+#             "claim_source": None,
+#             "superseding_papers": [],
+#             "answer": None,
+#             "is_relevant": None,
+#             "rewrite_count": 0,
+#         }
+#         full_answer: str = ""
+#         route: str = "unknown"
+
+#         try:
+
+#             async for chunk, metadata in graph.astream(
+#                 input_state, config, stream_mode="messages"
+#             ):
+#                 if (
+#                     metadata.get("langgraph_node") == "generate_answer"
+#                     and hasattr(chunk, "content")
+#                     and chunk.content
+#                 ):
+#                     full_answer += chunk.content
+#                     yield json.dumps({"type": "token", "data": chunk.content}) + "\n"
+
+#             final_values = (await graph.aget_state(config)).values
+#             route = final_values.get("route") or "unknown"
+#             retrieved_docs = final_values.get("retrieved_docs") or []
+#             sources = [
+#                 {"content": doc.page_content[:500], "metadata": doc.metadata}
+#                 for doc in retrieved_docs
+#             ]
+
+#             if not full_answer:
+#                 full_answer = final_values.get("answer") or ""
+
+#             validation = validate_output(full_answer)
+#             if not validation.safe:
+#                 logger.warning(
+#                     "PII redacted in output for session %s — types: %s",
+#                     session_id,
+#                     validation.pii_types,
+#                 )
+#             safe_answer = validation.redacted_output or full_answer
+
+#             yield json.dumps(
+#                 {
+#                     "type": "done",
+#                     "data": {
+#                         "answer": safe_answer,
+#                         "route": route,
+#                         "sources": sources,
+#                     },
+#                 }
+#             ) + "\n"
+
+#         except Exception:
+#             logger.exception("Stream failed for session %s", session_id)
+#             yield json.dumps(
+#                 {
+#                     "type": "error",
+#                     "data": "The request failed while generating a response. Please retry.",
+#                 }
+#             ) + "\n"
+
+#     return StreamingResponse(_stream(), media_type="application/x-ndjson")

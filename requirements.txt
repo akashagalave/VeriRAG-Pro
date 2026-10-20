@@ -30,6 +30,7 @@ uvicorn>=0.30.0
 dagshub
 mlflow
 langfuse>=3.0.0,<4.0.0
+langchain
 # ── Production additions ──────────────────────────────────────────────────────
 
 # Redis distributed cache + deduplication (Improvement 3)

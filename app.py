@@ -369,8 +369,9 @@ if prompt := st.chat_input("Ask about your papers, verify a claim, or search the
                     with client.stream(
                         "POST",
                         f"/sessions/{active_sid}/query",
-                        json={"question": prompt},
+                        json={"question": prompt,"session_id": active_sid},
                         headers={"X-Forwarded-For": client_ip},
+                        
                     ) as stream_resp:
                         stream_resp.raise_for_status()
                         for raw_line in stream_resp.iter_lines():

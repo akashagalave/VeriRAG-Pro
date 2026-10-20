@@ -16,6 +16,7 @@ langchain-community>=0.4.1
 langchain-classic>=1.0.7
 langchain-qdrant>=1.1.0
 langchain-text-splitters>=1.1.2
+langchain
 
 # LangGraph
 langgraph>=1.1.10
