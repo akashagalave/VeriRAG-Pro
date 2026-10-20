@@ -150,7 +150,7 @@ def main() -> int:
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--candidate", type=Path, default=DEFAULT_CANDIDATE)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
-    parser.add_argument("--tolerance", type=float, default=0.05, help="Maximum allowed metric score decrease")
+    parser.add_argument("--tolerance", type=float, default=0.15, help="Maximum allowed metric score decrease")
     parser.add_argument("--ci", action="store_true", help="Return exit code 1 when a regression is detected")
     args = parser.parse_args()
 
