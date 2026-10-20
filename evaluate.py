@@ -1,393 +1,197 @@
+"""VeriRAG-Pro: offline DeepEval regression checker.
+
+Uses the SAME approved golden questions for every comparison.
+Does not regenerate goldens, invoke LangGraph, run DeepEval, or call APIs.
+
+Run locally:
+    python evaluate.py
+
+Gate in CI:
+    python evaluate.py --ci
+
+Compare explicit reports:
+    python evaluate.py --ci --baseline reports/evaluation/attention_metrics_k3_baseline.json \
+        --candidate reports/evaluation/attention_metrics.json
+
+A fresh candidate report must be produced separately from the updated RAG system
+using the same golden questions. Comparing identical saved results is only a
+smoke test of the checker, not evidence that changed code has not regressed.
+"""
+
 import argparse
 import json
-import logging
+import math
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+ROOT = Path(__file__).resolve().parent
+DEFAULT_GOLDENS = ROOT / "data/evaluation/goldens/attention_goldens.json"
+DEFAULT_BASELINE = ROOT / "reports/evaluation/attention_metrics_k3_baseline.json"
+DEFAULT_CANDIDATE = ROOT / "reports/evaluation/attention_metrics.json"
+DEFAULT_REPORT = ROOT / "reports/evaluation/regression_summary.md"
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.sqlite import SqliteSaver
-
-from deepeval import evaluate
-from deepeval.evaluate import AsyncConfig
-from deepeval.metrics import (
-    AnswerRelevancyMetric,
-    ContextualPrecisionMetric,
-    ContextualRecallMetric,
-    ContextualRelevancyMetric,
-    FaithfulnessMetric,
-)
-from deepeval.synthesizer import Synthesizer
-from deepeval.synthesizer.config import ContextConstructionConfig
-from deepeval.test_case import LLMTestCase
-
-from backend.paper_loader import load_document
-from backend.rag_graph import build_graph
-from backend.vector_store import add_paper, get_collection_name, qdrant_client
-
-load_dotenv()
+EXPECTED_METRICS = {
+    "contextual_precision",
+    "contextual_recall",
+    "contextual_relevancy",
+    "answer_relevancy",
+    "faithfulness",
+    "answer_correctness_geval",
+    "simple_explanation_geval",
+}
 
 
-PDF_PATH             = "documents/Openclaw_Research_Report.pdf"
-GOLDENS_FILE         = Path("goldens.json")
-RESULTS_FILE         = Path("eval_results.json")
-BASELINE_FILE        = Path("eval_baseline.json")
-SUMMARY_FILE         = Path("eval_summary.md")
-CHECKPOINT_DB        = Path("eval_checkpoints.db")
-
-MAX_CONTEXTS         = 5
-GOLDENS_PER_CONTEXT  = 2
-METRIC_THRESHOLD     = 0.7
-JUDGE_MODEL          = "gpt-4o-mini"
-
-REGRESSION_TOLERANCE = 0.05
-
-HARD_GATE_METRICS = {"Faithfulness", "Answer Relevancy"}
-
-EVAL_SESSION_ID = "eval_fixed_session"
-
-RETRIEVAL_BIAS_SUFFIX = " as per the report in knowledge base"
+def read_list(path: Path, label: str) -> list[dict]:
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    with path.open("r", encoding="utf-8") as f:
+        obj = json.load(f)
+    if not isinstance(obj, list) or not obj or not all(isinstance(x, dict) for x in obj):
+        raise ValueError(f"{label} must be a nonempty JSON list of objects: {path}")
+    return obj
 
 
-def generate_goldens() -> list[dict]:
-    synthesizer = Synthesizer()
-    goldens = synthesizer.generate_goldens_from_docs(
-        document_paths=[PDF_PATH],
-        include_expected_output=True,
-        max_goldens_per_context=GOLDENS_PER_CONTEXT,
-        context_construction_config=ContextConstructionConfig(
-            max_contexts_per_document=MAX_CONTEXTS,
-        ),
-    )
-    pairs = [
-        {"input": g.input, "expected_output": g.expected_output}
-        for g in goldens
-        if g.input and g.expected_output
-    ]
-    GOLDENS_FILE.write_text(json.dumps(pairs, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Generated %d golden pairs → %s", len(pairs), GOLDENS_FILE)
-    return pairs
+def metric_key(name: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
 
 
-def load_goldens() -> list[dict]:
-    return json.loads(GOLDENS_FILE.read_text(encoding="utf-8"))
 
+def validate_and_summarize(
+    report: list[dict],
+    golden_inputs: list[str],
+    label: str,
+) -> dict[str, float]:
 
-def reset_eval_collection(session_id: str) -> None:
-    collection_name = get_collection_name(session_id)
-    if qdrant_client.collection_exists(collection_name):
-        qdrant_client.delete_collection(collection_name)
-        logger.info("Deleted stale eval collection: %s", collection_name)
+    actual_inputs = [row.get("input") for row in report]
 
+    # All approved questions must appear exactly once.
+    # DeepEval may return cases in a different order.
+    from collections import Counter
 
-def cleanup_eval_collection(session_id: str) -> None:
-    collection_name = get_collection_name(session_id)
-    try:
-        if qdrant_client.collection_exists(collection_name):
-            qdrant_client.delete_collection(collection_name)
-            logger.info("Cleaned up eval collection: %s", collection_name)
-    except Exception as exc:
-        logger.warning("Could not clean up eval collection %s: %s", collection_name, exc)
+    expected = Counter(golden_inputs)
+    actual = Counter(actual_inputs)
 
+    if actual != expected:
+        missing = list((expected - actual).elements())
+        extra = list((actual - expected).elements())
 
-def run_rag_query(
-    graph,
-    query: str,
-    session_id: str,
-    thread_id: str,
-) -> tuple[str, list[str], str]:
-    config = {"configurable": {"thread_id": thread_id}}
-    final_state = graph.invoke(
-        {
-            # Full initial state, matching what api.py sends — so the eval
-            # exercises the same code path as production.
-            "messages": [HumanMessage(content=query)],
-            "session_id": session_id,
-            "query": query,
-            "route": None,
-            "retrieved_docs": [],
-            "retrieval_attempts": 0,
-            "claim_verdict": None,
-            "claim_source": None,
-            "superseding_papers": [],
-            "answer": None,
-            "is_relevant": None,
-            "rewrite_count": 0,
-        },
-        config=config,
-    )
-    answer = final_state.get("answer") or ""
-    retrieval_context = [
-        doc.page_content for doc in (final_state.get("retrieved_docs") or [])
-    ]
-    route = final_state.get("route") or "unknown"
-    return answer, retrieval_context, route
-
-
-def extract_scores(results) -> dict[str, float]:
-    score_buckets: dict[str, list[float]] = {}
-    for test_result in results.test_results:
-        for m in test_result.metrics_data:
-            score_buckets.setdefault(m.name, []).append(m.score or 0.0)
-    return {name: sum(scores) / len(scores) for name, scores in score_buckets.items()}
-
-
-def detect_regression(
-    current_scores: dict[str, float],
-    baseline_scores: dict[str, float],
-) -> list[str]:
-    failures: list[str] = []
-
-    for metric, score in current_scores.items():
-        if metric in HARD_GATE_METRICS and score < METRIC_THRESHOLD:
-            failures.append(
-                f"HARD GATE FAIL — {metric}: {score:.3f} < threshold {METRIC_THRESHOLD}"
-            )
-            continue
-
-        baseline = baseline_scores.get(metric)
-        if baseline is not None:
-            drop = baseline - score
-            if drop > REGRESSION_TOLERANCE:
-                failures.append(
-                    f"REGRESSION — {metric}: {score:.3f} (baseline={baseline:.3f}, "
-                    f"drop={drop:.3f} > tolerance={REGRESSION_TOLERANCE})"
-                )
-
-    return failures
-
-
-def write_summary(
-    current_scores: dict[str, float],
-    baseline_scores: dict[str, float],
-    failures: list[str],
-    ci_mode: bool,
-    route_counts: dict[str, int] | None = None,
-    empty_context_goldens: list[int] | None = None,
-) -> None:
-    lines = ["# VeriRAG Evaluation Report\n"]
-    lines.append("| Metric | Score | Baseline | Status |")
-    lines.append("|--------|-------|----------|--------|")
-
-    for metric, score in sorted(current_scores.items()):
-        baseline = baseline_scores.get(metric, "—")
-        if isinstance(baseline, float):
-            drop = baseline - score
-            if drop > REGRESSION_TOLERANCE:
-                status = "🔴 REGRESSION"
-            elif score < METRIC_THRESHOLD:
-                status = "🟡 BELOW THRESHOLD"
-            else:
-                status = "✅ PASS"
-            baseline_str = f"{baseline:.3f}"
-        else:
-            status = "✅ PASS" if score >= METRIC_THRESHOLD else "🟡 BELOW THRESHOLD"
-            baseline_str = "—"
-        lines.append(f"| {metric} | {score:.3f} | {baseline_str} | {status} |")
-    if route_counts:
-        lines.append("\n## Route Distribution\n")
-        lines.append("| Route | Goldens |")
-        lines.append("|-------|---------|")
-        for route, count in sorted(route_counts.items()):
-            lines.append(f"| {route} | {count} |")
-        non_retrieve = sum(v for k, v in route_counts.items() if k != "retrieve")
-        if non_retrieve:
-            lines.append(
-                f"\n⚠️ {non_retrieve} golden(s) did not take the `retrieve` route. "
-                "Context metrics score 0 for those cases."
-            )
-
-    if empty_context_goldens:
-        lines.append(
-            f"\n⚠️ **{len(empty_context_goldens)} golden(s) produced an empty "
-            f"retrieval_context**: indices {empty_context_goldens}. "
-            "All four context metrics score 0 for these."
+        raise ValueError(
+            f"{label} questions do not match approved goldens. "
+            f"Missing: {missing}; Extra or duplicate: {extra}"
         )
 
-    if failures:
-        lines.append("\n## ❌ Regressions Detected\n")
-        for f in failures:
-            lines.append(f"- {f}")
-        lines.append("\n**Deployment BLOCKED** — fix regressions before merging.")
-    else:
-        lines.append("\n## ✅ All Checks Passed\n")
-        lines.append("Safe to deploy.")
 
-    summary_text = "\n".join(lines)
-    SUMMARY_FILE.write_text(summary_text, encoding="utf-8")
-    print(summary_text)
-    if ci_mode:
-        gh_summary = os.getenv("GITHUB_STEP_SUMMARY")
-        if gh_summary:
-            with open(gh_summary, "a", encoding="utf-8") as f:
-                f.write(summary_text)
+    metric_buckets = {name: [] for name in EXPECTED_METRICS}
+    for i, row in enumerate(report, start=1):
+        if not isinstance(row.get("actual_output"), str) or not row["actual_output"].strip():
+            raise ValueError(f"{label} case {i}: missing actual_output")
+        metrics = row.get("metrics")
+        if not isinstance(metrics, list):
+            raise ValueError(f"{label} case {i}: missing metrics list")
+        seen = set()
+        for metric in metrics:
+            if not isinstance(metric, dict) or not isinstance(metric.get("name"), str):
+                raise ValueError(f"{label} case {i}: invalid metric entry")
+            key = metric_key(metric["name"])
+            if key in seen:
+                raise ValueError(f"{label} case {i}: duplicate metric {key}")
+            seen.add(key)
+            if key not in EXPECTED_METRICS:
+                continue
+            score = metric.get("score")
+            if isinstance(score, bool) or not isinstance(score, (float, int)) or not math.isfinite(score):
+                raise ValueError(f"{label} case {i}: invalid score for {key}: {score!r}")
+            if not 0 <= score <= 1:
+                raise ValueError(f"{label} case {i}: out-of-range score for {key}: {score}")
+            if metric.get("error"):
+                raise ValueError(f"{label} case {i}: metric {key} errored: {metric['error']}")
+            metric_buckets[key].append(float(score))
+        missing = EXPECTED_METRICS - seen
+        if missing:
+            raise ValueError(f"{label} case {i}: missing metrics {sorted(missing)}")
+
+    return {key: sum(scores) / len(scores) for key, scores in metric_buckets.items()}
+
+
+def make_summary(baseline: dict[str, float], candidate: dict[str, float], tolerance: float,
+                 baseline_path: Path, candidate_path: Path, count: int) -> tuple[str, list[str]]:
+    lines = [
+        "# VeriRAG-Pro DeepEval Regression Report", "",
+        f"- Approved golden questions: **{count}** (fixed across both reports)",
+        f"- Baseline: `{baseline_path}`",
+        f"- Candidate: `{candidate_path}`",
+        f"- Allowed drop per metric: **{tolerance:.3f}**", "",
+        "| Metric | Baseline | Candidate | Difference | Status |",
+        "|---|---:|---:|---:|---|",
+    ]
+    regressions = []
+    for key in sorted(EXPECTED_METRICS):
+        delta = candidate[key] - baseline[key]
+        failed = delta < -tolerance - 1e-12
+        status = "REGRESSION" if failed else "OK"
+        lines.append(f"| {key} | {baseline[key]:.4f} | {candidate[key]:.4f} | {delta:+.4f} | {status} |")
+        if failed:
+            regressions.append(f"{key}: dropped {abs(delta):.4f} (allowed {tolerance:.4f})")
+    lines.extend(["", "## Result", ""])
+    if regressions:
+        lines.append(f"**Regression detected in {len(regressions)} metric(s).**")
+        lines.extend(f"- {item}" for item in regressions)
+    else:
+        lines.append("**No metric dropped beyond the configured tolerance.**")
+    lines.extend(["", "This is an offline comparison. It does not run RAG or DeepEval; a fresh candidate report is required to test code changes.", ""])
+    return "\n".join(lines), regressions
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="VeriRAG DeepEval regression pipeline")
-    parser.add_argument("--ci",       action="store_true", help="CI/CD mode — exit 1 on regression")
-    parser.add_argument("--generate", action="store_true", help="Regenerate golden pairs from PDF")
-    parser.add_argument(
-        "--limit", type=int, default=0,
-        help="Only run the first N goldens — for cheap smoke runs. 0 = all.",
-    )
+    parser = argparse.ArgumentParser(description="Offline DeepEval regression comparison on fixed goldens")
+    parser.add_argument("--goldens", type=Path, default=DEFAULT_GOLDENS)
+    parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    parser.add_argument("--candidate", type=Path, default=DEFAULT_CANDIDATE)
+    parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
+    parser.add_argument("--tolerance", type=float, default=0.05, help="Maximum allowed metric score decrease")
+    parser.add_argument("--ci", action="store_true", help="Return exit code 1 when a regression is detected")
     args = parser.parse_args()
 
-    if args.generate or not GOLDENS_FILE.exists():
-        pairs = generate_goldens()
-    else:
-        pairs = load_goldens()
+    if not math.isfinite(args.tolerance) or not 0 <= args.tolerance <= 1:
+        parser.error("--tolerance must be between 0 and 1")
 
-    if args.limit > 0:
-        pairs = pairs[: args.limit]
-        logger.warning(
-            "--limit %d active: running a SUBSET. Do not write this to the baseline.",
-            args.limit,
-        )
+    goldens = read_list(args.goldens, "Golden dataset")
+    golden_inputs = [g.get("input") for g in goldens]
+    if any(not isinstance(q, str) or not q.strip() for q in golden_inputs):
+        raise ValueError("Golden dataset contains an empty or invalid input")
+    if len(set(golden_inputs)) != len(golden_inputs):
+        raise ValueError("Golden dataset contains duplicate questions")
 
-    logger.info("Running evaluation on %d golden pairs…", len(pairs))
+    baseline_rows = read_list(args.baseline, "Baseline DeepEval report")
+    candidate_rows = read_list(args.candidate, "Candidate DeepEval report")
+    baseline = validate_and_summarize(baseline_rows, golden_inputs, "Baseline")
+    candidate = validate_and_summarize(candidate_rows, golden_inputs, "Candidate")
+    summary, regressions = make_summary(
+        baseline, candidate, args.tolerance, args.baseline, args.candidate, len(golden_inputs)
+    )
+    args.report.parent.mkdir(parents=True, exist_ok=True)
+    args.report.write_text(summary, encoding="utf-8")
+    print(summary)
+    print(f"Report saved: {args.report}")
 
-    baseline_scores: dict[str, float] = {}
-    if BASELINE_FILE.exists():
-        try:
-            baseline_scores = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
-            logger.info("Loaded baseline scores from %s", BASELINE_FILE)
-        except Exception as exc:
-            logger.warning("Could not load baseline: %s", exc)
+    gh_summary = os.getenv("GITHUB_STEP_SUMMARY")
+    if gh_summary:
+        with open(gh_summary, "a", encoding="utf-8") as f:
+            f.write(summary + "\n")
 
-    reset_eval_collection(EVAL_SESSION_ID)
-    CHECKPOINT_DB.unlink(missing_ok=True)
-    _eval_conn = sqlite3.connect(str(CHECKPOINT_DB), check_same_thread=False)
-    _eval_checkpointer = SqliteSaver(_eval_conn)
-    graph = build_graph(checkpointer=_eval_checkpointer)
-
-    try:
-        docs = load_document(PDF_PATH)
-        add_paper(docs, EVAL_SESSION_ID)
-        logger.info("Evaluation session: %s (%d chunks)", EVAL_SESSION_ID, len(docs))
-
-        metrics = [
-            ContextualPrecisionMetric(threshold=METRIC_THRESHOLD,  model=JUDGE_MODEL),
-            ContextualRecallMetric(threshold=METRIC_THRESHOLD,     model=JUDGE_MODEL),
-            ContextualRelevancyMetric(threshold=METRIC_THRESHOLD,  model=JUDGE_MODEL),
-            AnswerRelevancyMetric(threshold=METRIC_THRESHOLD,      model=JUDGE_MODEL),
-            FaithfulnessMetric(threshold=METRIC_THRESHOLD,         model=JUDGE_MODEL),
-        ]
-
-        test_cases: list[LLMTestCase] = []
-        route_counts: dict[str, int] = {}
-        empty_context_goldens: list[int] = []
-
-        for idx, pair in enumerate(pairs):
-            asked_query = pair["input"] + RETRIEVAL_BIAS_SUFFIX
-
-            # One isolated checkpoint thread per golden — the core fix.
-            thread_id = f"{EVAL_SESSION_ID}__golden_{idx:03d}"
-
-            answer, retrieval_context, route = run_rag_query(
-                graph, asked_query, EVAL_SESSION_ID, thread_id
-            )
-
-            route_counts[route] = route_counts.get(route, 0) + 1
-
-            if not retrieval_context:
-                empty_context_goldens.append(idx)
-                logger.warning(
-                    "Golden %d produced EMPTY retrieval_context (route=%s) — "
-                    "all four context metrics will score 0 for this case.",
-                    idx, route,
-                )
-
-            logger.info(
-                "Golden %d/%d done | route=%s | chunks=%d | thread=%s",
-                idx + 1, len(pairs), route, len(retrieval_context), thread_id,
-            )
-
-            test_cases.append(LLMTestCase(
-                input=asked_query,
-                actual_output=answer,
-                expected_output=pair["expected_output"],
-                retrieval_context=retrieval_context,
-            ))
-
-        logger.info("Route distribution across %d goldens: %s", len(pairs), route_counts)
-        if empty_context_goldens:
-            logger.warning(
-                "%d/%d goldens had empty retrieval_context: %s",
-                len(empty_context_goldens), len(pairs), empty_context_goldens,
-            )
-
-        results = evaluate(
-            test_cases,
-            metrics,
-            async_config=AsyncConfig(max_concurrent=3, throttle_value=5),
-        )
-
-        summary_rows = []
-        for test_result in results.test_results:
-            summary_rows.append({
-                "input": test_result.input,
-                "actual_output": test_result.actual_output,
-                "success": test_result.success,
-                "metrics": [
-                    {
-                        "name": m.name,
-                        "score": m.score,
-                        "passed": m.success,
-                        "reason": m.reason,
-                    }
-                    for m in test_result.metrics_data
-                ],
-            })
-        RESULTS_FILE.write_text(
-            json.dumps(summary_rows, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        logger.info("Full results saved → %s", RESULTS_FILE)
-
-        current_scores = extract_scores(results)
-        failures = detect_regression(current_scores, baseline_scores)
-
-        write_summary(
-            current_scores, baseline_scores, failures,
-            ci_mode=args.ci,
-            route_counts=route_counts,
-            empty_context_goldens=empty_context_goldens,
-        )
-
-        if failures:
-            logger.error("EVALUATION GATE FAILED — %d regression(s) detected:", len(failures))
-            for f in failures:
-                logger.error("  %s", f)
-            return 1
-
-        if args.limit > 0:
-            logger.warning(
-                "Skipping baseline write — this was a --limit %d subset run.", args.limit
-            )
-        else:
-            BASELINE_FILE.write_text(
-                json.dumps(current_scores, indent=2, ensure_ascii=False), encoding="utf-8"
-            )
-            logger.info("Baseline updated → %s", BASELINE_FILE)
-
-        logger.info("✅ Evaluation passed. Safe to deploy.")
-        return 0
-
-    finally:
-        cleanup_eval_collection(EVAL_SESSION_ID)
-        try:
-            _eval_conn.close()
-        except Exception:
-            pass
+    if regressions and args.ci:
+        print("CI gate failed: regression detected", file=sys.stderr)
+        return 1
+    if regressions:
+        print("Regressions detected (informational mode; use --ci to fail)")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"Evaluation comparison error: {exc}", file=sys.stderr)
+        sys.exit(2)

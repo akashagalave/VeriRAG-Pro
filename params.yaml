@@ -1,0 +1,59 @@
+
+# VeriRAG-Pro — Local RAG Experiment Configuration
+
+rag_app:
+  prompt_label: latest
+  llm: gpt-4o-mini
+  embedding_model: text-embedding-3-small
+  embedding_dimensions: 1536
+
+  # Character-based splitting
+  chunk_size: 500
+  chunk_overlap: 100
+
+  # Qdrant hybrid retrieval
+  search_type: hybrid
+  k: 3
+
+golden_dataset:
+  dataset_model: gpt-4.1-mini
+  max_goldens_per_context: 1
+  golden_dataset_filename: attention_goldens
+
+  filtration_config:
+    filtration_threshold: 0.6
+    max_quality_retries: 1
+    filtration_critic_model: gpt-4.1-mini
+
+  evolution_config:
+    num_evolutions: 1
+    evolutions:
+      multicontext: 0.1
+      concretizing: 0.3
+      constrained: 0.4
+      comparative: 0.2
+
+  context_construction_config:
+    context_critic_model: gpt-4.1-mini
+    max_contexts_per_document: 1
+    context_threshold: 0.7
+    max_context_retries: 2
+    context_chunk_size: 300
+    context_chunk_overlap: 30
+
+evaluation_dataset:
+  evaluation_dataset_filename: attention_eval_dataset
+
+evaluation:
+  judge_llm: gpt-4.1-mini
+
+  async_config:
+    throttle_value: 3
+    max_concurrent: 3
+
+  display_config:
+    results_dir: reports/evaluation
+
+mlflow:
+  tracking_uri: https://dagshub.com/akashagalaveaaa1/VeriRAG-Pro.mlflow
+  experiment_name: VeriRAG-RAG-Experiments

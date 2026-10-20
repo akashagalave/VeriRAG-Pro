@@ -1,0 +1,42 @@
+[
+  {
+    "input": "What main architectural innovation does Transformer introduce, excluding recurrence and convolution?",
+    "expected_output": "The Transformer introduces a model architecture based entirely on self-attention mechanisms, eliminating the use of recurrence and convolution. This allows for modeling global dependencies between input and output sequences with significantly more parallelization and improved training efficiency."
+  },
+  {
+    "input": "If recurrence and convolutions were removed, how would multi-head attention alone capture sequence dependencies?",
+    "expected_output": "Multi-head attention captures sequence dependencies by relating all positions in the input and output sequences simultaneously, allowing the model to draw global dependencies without regard to their distance. Unlike recurrence or convolutions, which process sequences sequentially or locally, multi-head attention computes weighted sums of values based on the similarity between queries and keys across the entire sequence. This enables constant-time dependency modeling between any two positions, effectively capturing long-range relationships through multiple attention heads that focus on different representation subspaces, as described in section 3.2."
+  },
+  {
+    "input": "Explain the architecture and advantages of fully self-attentional Transformer networks over RNNs.",
+    "expected_output": "The Transformer architecture replaces recurrent and convolutional layers entirely with multi-headed self-attention mechanisms. Unlike RNNs, which process sequences sequentially and thus limit parallelization, the Transformer computes representations for all positions simultaneously, enabling significantly faster training. Self-attention allows the model to capture global dependencies regardless of distance in the sequence, reducing the number of operations needed to relate distant positions to a constant, unlike convolutional models where this grows with distance. This design leads to superior translation quality and efficiency, achieving state-of-the-art results on tasks like WMT 2014 English-to-German and English-to-French translation while requiring less training time."
+  },
+  {
+    "input": "How does Transformer replace recurrent layers with multi-head self-attention while enabling parallelization?",
+    "expected_output": "The Transformer replaces recurrent layers by using multi-head self-attention mechanisms that relate all positions in the input sequence simultaneously, eliminating the sequential dependency inherent in RNNs. This allows the model to compute representations for all positions in parallel, significantly improving training speed and enabling better parallelization compared to recurrent architectures."
+  },
+  {
+    "input": "How does multi-head attention improve attending to diff representation subspaces while reducing computational cost?",
+    "expected_output": "Multi-head attention improves attending to different representation subspaces by using multiple parallel attention heads, each with its own learned projections (WQ_i, WK_i, WV_i) that focus on different aspects of the input. This allows the model to jointly attend to information from various subspaces at different positions, avoiding the averaging effect of single-head attention. Despite having multiple heads, the dimension of each head is reduced (dk = dv = dmodel/h), keeping the total computational cost similar to that of a single full-dimensional attention head."
+  },
+  {
+    "input": "Compare the roles and differences of encoder self-attention, decoder self-attention, and encoder-decoder attention in Transformer.",
+    "expected_output": "Encoder self-attention allows each position in the encoder to attend to all positions in the input sequence, capturing contextual information within the input. Decoder self-attention lets each position in the decoder attend to all previous positions in the output sequence while masking future positions to preserve auto-regressiveness. Encoder-decoder attention enables each decoder position to attend over all encoder outputs, linking the generated output to the input sequence. Thus, encoder self-attention models input dependencies, decoder self-attention models output dependencies with causal masking, and encoder-decoder attention connects input and output representations."
+  },
+  {
+    "input": "How do the Transformer’s encoder-decoder stacks, multi-head attention, and feed-forward layers integrate?",
+    "expected_output": "The Transformer's encoder-decoder stacks integrate through multi-head attention and feed-forward layers as follows: The encoder consists of 6 identical layers, each with a multi-head self-attention sub-layer followed by a position-wise feed-forward network, both wrapped with residual connections and layer normalization. The decoder also has 6 layers but adds a third sub-layer performing multi-head attention over the encoder's output, enabling the decoder to attend to all input positions. Multi-head attention allows the model to jointly focus on different representation subspaces, improving dependency modeling. Feed-forward layers apply two linear transformations with ReLU activation position-wise, enhancing representation learning independently at each position. This integration enables effective sequence transduction without recurrence."
+  },
+  {
+    "input": "If the Transformer doubled its encoder layers, how would stacked self-attention and feed-forward layers affect performance?",
+    "expected_output": "Doubling the encoder layers from 6 to 12 would increase the number of stacked self-attention and feed-forward sub-layers, potentially improving the model's capacity to capture complex dependencies and richer representations. However, this also increases computational cost and memory usage. The residual connections and layer normalization in each sub-layer would help maintain stable training despite the deeper stack. Overall, performance might improve due to deeper modeling, but with diminishing returns and higher resource demands."
+  },
+  {
+    "input": "How does Transformer (big) surpass prior EN-DE models in BLEU and training FLOPs efficiency?",
+    "expected_output": "The Transformer (big) achieves a new state-of-the-art BLEU score of 28.4 on the English-to-German task, outperforming all previously reported models including ensembles by more than 2.0 BLEU. It does so with a training cost of 2.3 · 10¹⁹ FLOPs, which is significantly lower than prior models like GNMT + RL Ensemble (1.8 · 10²⁰ FLOPs) and ConvS2S Ensemble (7.7 · 10¹⁹ FLOPs). This efficiency comes from its fully attention-based architecture that replaces recurrent and convolutional layers, enabling faster training and better performance at a fraction of the computational cost."
+  },
+  {
+    "input": "Contrast Transformer’s BLEU efficiency and FLOPs with prior SOTA on WMT14 EN-DE/EN-FR tasks.",
+    "expected_output": "The Transformer achieves higher BLEU scores than previous state-of-the-art models on WMT14 English-to-German and English-to-French tasks while using significantly fewer FLOPs. For English-to-German, the big Transformer model attains a BLEU of 28.4, surpassing prior best models by over 2.0 BLEU, with a training cost of 2.3·10¹⁹ FLOPs—much lower than ensembles like GNMT + RL (1.8·10²⁰ FLOPs). For English-to-French, it reaches 41.8 BLEU at 2.3·10¹⁹ FLOPs, outperforming previous single models at less than one-quarter of their training cost. Even the base Transformer model outperforms all prior models and ensembles at a fraction of their computational expense."
+  }
+]

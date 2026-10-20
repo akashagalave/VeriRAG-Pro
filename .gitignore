@@ -21,3 +21,22 @@ __pycache__/
 ak.md
 VeriRAG-DeploymentGuide.md
 k8s/postgres-secret.yml
+# Local application state
+sessions.json
+backend-lt.json
+frontend-lt.json
+
+# Temporary evaluation outputs
+data/evaluation/eval_dataset/
+reports/evaluation/*
+!reports/evaluation/attention_metrics_k3_baseline.json
+
+# Local debugging scripts
+test_tool_injection.py
+
+# Local secret-management helper (review before committing)
+update_langfuse_secret.py
+
+# Local environment and secrets
+.env.*
+!.env.example

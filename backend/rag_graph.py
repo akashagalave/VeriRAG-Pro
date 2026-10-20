@@ -574,6 +574,7 @@ class RAGState(MessagesState):
     answer: str | None
     is_relevant: bool | None
     rewrite_count: int
+    
 
 
 ROUTER_PROMPT = ChatPromptTemplate.from_messages([
@@ -647,11 +648,16 @@ def retrieve_from_vectorstore(
     session_id: Annotated[str, InjectedState("session_id")],
     current_docs: Annotated[list, InjectedState("retrieved_docs")],
     tool_call_id: Annotated[str, InjectedToolCallId],
+    
 ) -> list:
     """Search the uploaded research paper vector store for relevant passages.
     Uses hybrid BM25 + dense retrieval with Reciprocal Rank Fusion.
     """
-    docs = vs_search(query=query, session_id=session_id, k=k)
+    docs = vs_search(
+        query=query,
+        session_id=session_id,
+        k=k,
+    )
 
     if not docs:
         return [ToolMessage(

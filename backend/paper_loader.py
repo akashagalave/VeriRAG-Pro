@@ -10,8 +10,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 _ARXIV_ID_RE = re.compile(r"(\d{4}\.\d{4,5}(?:v\d+)?)")
 
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 100
 
 _splitter = RecursiveCharacterTextSplitter(
     chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP, add_start_index=True
@@ -27,9 +27,32 @@ def _stamp_title(docs: list[Document], title: str) -> list[Document]:
     return docs
 
 
-def load_pdf(file_path: str) -> list[Document]:
+
+def load_pdf(
+    file_path: str,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+) -> list[Document]:
+
     docs = PyMuPDFLoader(file_path).load()
-    return _stamp_title(_splitter.split_documents(docs), Path(file_path).stem)
+
+    if chunk_size is None and chunk_overlap is None:
+        splitter = _splitter
+    else:
+        size = CHUNK_SIZE if chunk_size is None else chunk_size
+        overlap = CHUNK_OVERLAP if chunk_overlap is None else chunk_overlap
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=size,
+            chunk_overlap=overlap,
+            add_start_index=True,
+        )
+
+    return _stamp_title(
+        splitter.split_documents(docs),
+        Path(file_path).stem,
+    )
+
 
 
 def load_text(file_path: str) -> list[Document]:
