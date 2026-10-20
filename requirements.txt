@@ -27,7 +27,9 @@ slowapi>=0.1.9
 streamlit>=1.57.0
 tavily-python>=0.7.24
 uvicorn>=0.30.0
-
+dagshub
+mlflow
+langfuse>=3.0.0,<4.0.0
 # ── Production additions ──────────────────────────────────────────────────────
 
 # Redis distributed cache + deduplication (Improvement 3)
