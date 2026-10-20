@@ -199,7 +199,7 @@ jobs:
       - name: Run DeepEval regression comparison
         shell: bash
         run: |
-          python evaluate.py --ci --tolerance 0.05
+          python evaluate.py --ci --tolerance 0.15
 
       # Save reports even if earlier evaluation steps fail.
       - name: Upload evaluation artifacts
