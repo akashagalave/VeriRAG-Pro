@@ -1,23 +1,3 @@
-"""VeriRAG-Pro: offline DeepEval regression checker.
-
-Uses the SAME approved golden questions for every comparison.
-Does not regenerate goldens, invoke LangGraph, run DeepEval, or call APIs.
-
-Run locally:
-    python evaluate.py
-
-Gate in CI:
-    python evaluate.py --ci
-
-Compare explicit reports:
-    python evaluate.py --ci --baseline reports/evaluation/attention_metrics_k3_baseline.json \
-        --candidate reports/evaluation/attention_metrics.json
-
-A fresh candidate report must be produced separately from the updated RAG system
-using the same golden questions. Comparing identical saved results is only a
-smoke test of the checker, not evidence that changed code has not regressed.
-"""
-
 import argparse
 import json
 import math
@@ -65,9 +45,6 @@ def validate_and_summarize(
 ) -> dict[str, float]:
 
     actual_inputs = [row.get("input") for row in report]
-
-    # All approved questions must appear exactly once.
-    # DeepEval may return cases in a different order.
     from collections import Counter
 
     expected = Counter(golden_inputs)
