@@ -18,7 +18,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 
 def main():
 
-    # Existing 10-question DeepEval baseline
     results_path = (
         ROOT_DIR
         / "reports/evaluation/attention_metrics_k3_baseline.json"
@@ -33,9 +32,6 @@ def main():
         ROOT_DIR
         / "data/evaluation/goldens/attention_goldens.json"
     )
-
-    # Historical baseline configuration
-    # These must match the settings used to create the saved results.
     experiment_params = {
         "chunk_size": 500,
         "chunk_overlap": 100,

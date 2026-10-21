@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Project paths
+
 ROOT_DIR = Path(__file__).resolve().parent
 
 PDF_PATH = (
@@ -26,7 +26,7 @@ OUTPUT_PATH = (
     / "goldens" / "attention_goldens.json"
 )
 
-# Golden generation settings
+
 MODEL = "gpt-4.1-mini"
 MAX_CONTEXTS = 5
 GOLDENS_PER_CONTEXT = 2
@@ -51,10 +51,8 @@ def generate_goldens():
         exist_ok=True
     )
 
-    # Initialize DeepEval Synthesizer
     synthesizer = Synthesizer(model=MODEL)
 
-    # Generate goldens from the research paper
     goldens = synthesizer.generate_goldens_from_docs(
         document_paths=[str(PDF_PATH)],
         include_expected_output=True,
@@ -64,7 +62,6 @@ def generate_goldens():
         )
     )
 
-    # Keep only valid question-answer pairs
     pairs = [
         {
             "input": golden.input,
@@ -78,8 +75,6 @@ def generate_goldens():
         raise RuntimeError(
             "No valid golden Q&A pairs were generated."
         )
-
-    # Save the golden dataset
     OUTPUT_PATH.write_text(
         json.dumps(
             pairs,

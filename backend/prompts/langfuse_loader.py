@@ -1,6 +1,3 @@
-
-"""Load versioned RAG prompts from Langfuse with local fallbacks."""
-
 import logging
 import os
 

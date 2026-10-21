@@ -1,11 +1,3 @@
-"""Generate VeriRAG-Pro evaluation cases from approved Attention goldens.
-
-Usage:
-    python generate_eval_dataset.py --limit 1   # inexpensive smoke test
-    python generate_eval_dataset.py             # all 10 goldens
-
-This script does not touch evaluate.py, eval_baseline.json, or CI/CD.
-"""
 
 import argparse
 import json
@@ -34,8 +26,6 @@ GOLDENS_PATH = ROOT / "data" / "evaluation" / "goldens" / "attention_goldens.jso
 OUTPUT_DIR = ROOT / "data" / "evaluation" / "eval_dataset"
 MAX_GOLDENS = 10
 
-# Same retrieval nudge used in existing evaluate.py, so we exercise paper retrieval.
-# Keep the original question in the stored 'input' field for later metric evaluation.
 RETRIEVAL_SUFFIX = " as per the report in knowledge base"
 
 
@@ -99,10 +89,9 @@ def main() -> None:
     if output.exists():
         raise FileExistsError(f"Output already exists; move it before rerunning: {output}")
 
-    # Unique IDs avoid deleting/overwriting the old project's eval collection.
     session_id = f"attention_eval_{uuid.uuid4().hex[:12]}"
     collection = get_collection_name(session_id)
-    # A separate temporary local checkpoint file per run; not the app's checkpoint DB.
+  
     checkpoint_file = OUTPUT_DIR / f".{session_id}_checkpoints.db"
     conn = None
     collection_created = False
@@ -136,7 +125,7 @@ def main() -> None:
             logger.info("route=%s | retrieved chunks=%d | answer chars=%d",
                         result["route"], len(result["retrieval_context"]),
                         len(result["actual_output"]))
-            # Persist completed cases even if a later request fails.
+           
             output.write_text(json.dumps(rows, ensure_ascii=False, indent=2),
                               encoding="utf-8")
 

@@ -1,16 +1,4 @@
 
-"""Central registry of VeriRAG-Pro prompts managed through Langfuse.
-
-The prompt text is retained locally as a fallback if Langfuse is unavailable.
-The system prompts are copied from the existing RAG workflow.
-
-Do not change prompt wording during the initial Langfuse integration.
-"""
-
-# ---------------------------------------------------------------------------
-# Langfuse prompt names
-# ---------------------------------------------------------------------------
-
 PROMPT_LABEL = "latest"
 
 ROUTER_PROMPT_NAME = "verirag_router"

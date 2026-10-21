@@ -46,10 +46,6 @@ env:
 
 jobs:
 
-  # =========================================================
-  # 1. DEEPEVAL QUALITY GATE
-  # =========================================================
-
   eval-gate:
     name: DeepEval Quality Gate
     runs-on: ubuntu-latest
@@ -69,12 +65,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Validate the new YAML/Pydantic configuration.
       - name: Validate experiment configuration
         run: python -m config.parameter_config
 
-      # These assets are approved and reused on every run.
-      # CI must never regenerate or overwrite the baseline.
       - name: Verify approved evaluation assets
         shell: bash
         run: |
@@ -88,8 +81,6 @@ jobs:
           echo "Fixed baseline report found."
           echo "Research PDF found."
 
-      # Retrieval k is currently hardcoded to 3 in rag_graph.py.
-      # Prevent misleading experiment configurations.
       - name: Verify retrieval configuration
         shell: bash
         run: |
@@ -104,8 +95,6 @@ jobs:
           print("Retrieval configuration verified: k=3")
           PY
 
-      # Remove any tracked/stale candidate outputs before generating.
-      # This does NOT remove goldens or approved baseline.
       - name: Prepare fresh evaluation outputs
         shell: bash
         run: |
@@ -173,7 +162,6 @@ jobs:
           print("Fresh dataset verified: 10 retrieval cases")
           PY
 
-      # Run all 7 DeepEval metrics using the configured judge.
       - name: Run DeepEval quality evaluation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -194,14 +182,11 @@ jobs:
         run: |
           test -s reports/evaluation/attention_metrics.json
 
-      # Compare against the approved fixed baseline.
-      # Exit code 1 blocks downstream build and deployment.
       - name: Run DeepEval regression comparison
         shell: bash
         run: |
           python evaluate.py --ci --tolerance 0.15
 
-      # Save reports even if earlier evaluation steps fail.
       - name: Upload evaluation artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -214,9 +199,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  # =========================================================
-  # 2. BUILD AND PUSH DOCKER IMAGES
-  # =========================================================
 
   build:
     name: Build and Push ECR Images
@@ -252,9 +234,6 @@ jobs:
 
           docker push "$ECR_REGISTRY/$FRONTEND_IMAGE:$GITHUB_SHA"
 
-  # =========================================================
-  # 3. PACKAGE CODEDEPLOY REVISIONS
-  # =========================================================
 
   package-revisions:
     name: Package and Upload CodeDeploy Revisions
@@ -338,9 +317,6 @@ jobs:
           echo "backend_key=verirag/$GITHUB_SHA/backend.zip" >> "$GITHUB_OUTPUT"
           echo "frontend_key=verirag/$GITHUB_SHA/frontend.zip" >> "$GITHUB_OUTPUT"
 
-  # =========================================================
-  # 4. DEPLOY BACKEND
-  # =========================================================
 
   deploy-backend:
     name: Deploy Backend EC2
@@ -381,9 +357,6 @@ jobs:
           aws deploy wait deployment-successful \
             --deployment-id "$deployment_id"
 
-  # =========================================================
-  # 5. DEPLOY FRONTEND
-  # =========================================================
 
   deploy-frontend:
     name: Deploy Frontend EC2

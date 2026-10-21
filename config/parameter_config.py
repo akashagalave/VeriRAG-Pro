@@ -6,10 +6,7 @@ import yaml
 from config.config_types import Params
 
 
-# Project root: C:\VeriRAG-production
 ROOT_DIR = Path(__file__).resolve().parent.parent
-
-# YAML configuration path
 PARAMS_PATH = ROOT_DIR / "params.yaml"
 
 
@@ -31,11 +28,9 @@ def load_config(params_path: Path | str = PARAMS_PATH) -> Params:
             "params.yaml must contain a YAML mapping."
         )
 
-    # Validate using our Pydantic models
     return Params.model_validate(yaml_config, strict=True)
 
 
-# Shared validated configuration
 params_config = load_config()
 
 

@@ -1,5 +1,3 @@
-"""Register VeriRAG-Pro prompts in Langfuse."""
-
 from dotenv import load_dotenv
 from langfuse import get_client
 
