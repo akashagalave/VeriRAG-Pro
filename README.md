@@ -99,7 +99,7 @@ Every push runs an offline DeepEval suite and compares results against a stored 
 | Answer Relevancy | **0.956** |
 | Other metrics (7 total) | see `eval_baseline.json` |
 
-- Evaluated offline on **[TODO: dataset name, N claims]**
+- Evaluated offline
 - Runs, scores, and parameters are logged to **MLflow on DagsHub** for experiment comparison
 - Regression checks run in GitHub Actions and gate the build and deploy jobs
 
