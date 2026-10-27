@@ -3,7 +3,7 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-
+from ipaddress import ip_address
 import httpx
 import streamlit as st
 from dotenv import load_dotenv
@@ -77,12 +77,16 @@ def maybe_rename_session(session_id: str, first_message: str) -> None:
     save_sessions(st.session_state.sessions_meta)
 
 
-def get_upstream_client_ip() -> str:
-    headers = st.context.headers
-    xff = headers.get("X-Forwarded-For") or headers.get("x-forwarded-for") or ""
-    if xff:
-        return xff.split(",")[0].strip()
-    return "unknown"
+def get_rate_limit_headers() -> dict[str, str]:
+    xff = st.context.headers.get("X-Forwarded-For", "")
+    if not xff:
+        return {}
+    candidate = xff.split(",")[-1].strip()
+    try:
+        client_ip = str(ip_address(candidate))
+    except ValueError:
+        return {}
+    return {"X-Forwarded-For": client_ip}
 
 
 def load_session_chats(session_id: str) -> list[dict]:
@@ -185,6 +189,7 @@ with st.sidebar:
                             resp = client.post(
                                 f"/sessions/{active_sid}/ingest",
                                 files={"file": (f.name, f.read(), f.type)},
+                                headers=get_rate_limit_headers(),
                             )
                         resp.raise_for_status()
                         data = resp.json()
@@ -216,6 +221,7 @@ with st.sidebar:
                             resp = client.post(
                                 f"/sessions/{active_sid}/ingest",
                                 data={"url": url},
+                                headers=get_rate_limit_headers(),
                             )
                         resp.raise_for_status()
                         data = resp.json()
@@ -239,12 +245,11 @@ with st.sidebar:
         if arxiv_title.strip():
             with st.spinner("Loading from ArXiv…"):
                 try:
-                    client_ip = get_upstream_client_ip()
                     with _client() as client:
                         resp = client.post(
                             f"/sessions/{active_sid}/ingest",
                             data={"arxiv_query": arxiv_title.strip()},
-                            headers={"X-Forwarded-For": client_ip},
+                            headers=get_rate_limit_headers(),
                         )
                     resp.raise_for_status()
                     data = resp.json()
@@ -364,13 +369,12 @@ if prompt := st.chat_input("Ask about your papers, verify a claim, or search the
             error_msg: str | None = None
 
             try:
-                client_ip = get_upstream_client_ip()
                 with httpx.Client(base_url=BACKEND_URL, timeout=120.0) as client:
                     with client.stream(
                         "POST",
                         f"/sessions/{active_sid}/query",
                         json={"question": prompt,"session_id": active_sid},
-                        headers={"X-Forwarded-For": client_ip},
+                        headers=get_rate_limit_headers(),
                         
                     ) as stream_resp:
                         stream_resp.raise_for_status()
