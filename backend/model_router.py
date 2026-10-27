@@ -28,11 +28,6 @@ class _CircuitState(Enum):
 
 @dataclass
 class CircuitBreaker:
-    """
-    Per-provider circuit breaker.
-    Thread-safety: not locked — acceptable for our async-within-sync model
-    since LangGraph nodes run sequentially within a thread.
-    """
     name: str
     failure_threshold: int   = _CB_FAILURE_THRESHOLD
     recovery_timeout:  float = _CB_RECOVERY_TIMEOUT
@@ -47,10 +42,6 @@ class CircuitBreaker:
         return self._state.value
 
     def is_open(self) -> bool:
-        """
-        Returns True if requests should be blocked for this provider.
-        Automatically transitions OPEN → HALF_OPEN after recovery_timeout.
-        """
         if self._state == _CircuitState.OPEN:
             elapsed = time.monotonic() - self._last_failure_time
             if elapsed >= self.recovery_timeout:
@@ -100,10 +91,6 @@ class _Provider:
 
 
 def _build_providers() -> list[_Provider]:
-    """
-    Build the ordered list of providers from available env vars.
-    Providers are tried in order — first available is primary.
-    """
     providers: list[_Provider] = []
 
     if os.getenv("OPENAI_API_KEY"):
@@ -135,8 +122,6 @@ def _build_providers() -> list[_Provider]:
             logger.info("langchain-anthropic not installed — Claude fallback unavailable")
         except Exception as exc:
             logger.warning("Anthropic provider init failed: %s", exc)
-
-    # ── Fallback 2: Google Gemini Flash 
     if os.getenv("GOOGLE_API_KEY"):
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
@@ -181,10 +166,6 @@ def _is_transient(exc: Exception) -> bool:
 
 
 def _invoke_with_retry(bound_llm: Any, messages: list, max_retries: int) -> Any:
-    """
-    Invoke bound_llm with exponential backoff retry on transient errors.
-    Non-transient errors (auth failures, bad requests) fail immediately.
-    """
     last_exc: Exception = RuntimeError("No attempts made")
 
     for attempt in range(max_retries + 1):
@@ -212,25 +193,6 @@ def invoke_with_fallback(
     parallel_tool_calls: bool = False,
     max_retries: int = _MAX_RETRIES,
 ) -> Any:
-    """
-    Invoke the LLM through the provider fallback chain.
-
-    Tries each provider in order. Skips providers with open circuit breakers.
-    Within each provider, retries transient errors with exponential backoff.
-
-    Args:
-        messages:                 LangChain message list or list of dicts.
-        structured_output_schema: Pydantic model → uses with_structured_output().
-        tools:                    Tool list → uses bind_tools().
-        parallel_tool_calls:      Passed to bind_tools(). Default False.
-        max_retries:              Transient retry attempts per provider.
-
-    Returns:
-        LLM response (same interface as llm.invoke()).
-
-    Raises:
-        RuntimeError if ALL providers fail or are circuit-open.
-    """
     providers = _get_providers()
     last_exc: Exception = RuntimeError("All providers tried")
     providers_tried: list[str] = []
@@ -243,7 +205,6 @@ def invoke_with_fallback(
             logger.debug("Circuit OPEN for %s — skipping", name)
             continue
 
-        # Build bound LLM — structured output or tools or plain
         bound = provider.llm
         if structured_output_schema is not None:
             bound = provider.llm.with_structured_output(structured_output_schema)
@@ -281,15 +242,10 @@ def invoke_with_fallback(
 
 
 def get_primary_llm() -> Any:
-    """Return the primary provider's LLM for direct use (e.g. tool binding singletons)."""
     return _get_providers()[0].llm
 
 
 def get_circuit_breaker_status() -> list[dict]:
-    """
-    Return circuit breaker states for all registered providers.
-    Used by /health endpoint and Prometheus metrics.
-    """
     return [
         {
             "provider": p.name,
