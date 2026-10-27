@@ -192,7 +192,6 @@ class SessionInfoResponse(BaseModel):
 
 @app.get("/health", tags=["ops"], summary="Liveness probe")
 async def health():
-    """Always 200. Includes circuit breaker status for each LLM provider."""
     return {
         "status": "ok",
         "providers": get_circuit_breaker_status(),
@@ -201,7 +200,6 @@ async def health():
 
 @app.get("/ready", tags=["ops"], summary="Readiness probe")
 async def ready():
-    """Returns 200 only after LangGraph has compiled."""
     if _graph is None:
         raise HTTPException(status_code=503, detail="Graph not ready yet.")
     return {"status": "ready"}
