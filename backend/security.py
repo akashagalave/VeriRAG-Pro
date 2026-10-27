@@ -109,15 +109,6 @@ class ValidationResult:
 
 
 def check_input(user_input: str) -> GuardrailResult:
-    """
-    Fast, rule-based prompt injection and jailbreak detection.
-    No LLM call. Runs in microseconds.
-
-    Returns GuardrailResult(safe=False) on first match — caller should
-    reject the request with HTTP 400 immediately.
-
-    Policy: FAIL CLOSED — when in doubt, block.
-    """
     if not user_input or not user_input.strip():
         return GuardrailResult(safe=False, reason="Empty input.", flagged_pattern="empty_input")
 
@@ -151,13 +142,6 @@ def check_input(user_input: str) -> GuardrailResult:
 
 
 def sanitize_context(raw_text: str) -> SanitizedContext:
-    """
-    Remove hidden instructions injected into retrieved web content.
-    This guards against indirect / retrieval-poisoning attacks where
-    a malicious web page embeds instructions directed at the LLM.
-
-    Policy: FAIL OPEN — if this errors, log and return raw text.
-    """
     if not raw_text:
         return SanitizedContext(content=raw_text, redacted_count=0, was_clean=True)
 
@@ -192,10 +176,6 @@ def sanitize_context(raw_text: str) -> SanitizedContext:
 
 
 def _presidio_redact(text: str) -> tuple[str, list[str]]:
-    """
-    Attempt PII redaction using Microsoft Presidio.
-    Raises ImportError if Presidio not installed.
-    """
     from presidio_analyzer import AnalyzerEngine  # type: ignore
     from presidio_anonymizer import AnonymizerEngine  # type: ignore
 
@@ -223,15 +203,6 @@ def _regex_redact(text: str) -> tuple[str, list[str]]:
 
 
 def validate_output(llm_output: str) -> ValidationResult:
-    """
-    Scan LLM-generated output for PII before returning it to the user.
-
-    Tries Presidio first (richer detection — names, orgs, dates, etc.).
-    Falls back to regex patterns if Presidio is not installed.
-
-    Policy: FAIL OPEN — if validation errors, return original output.
-            A failed PII scan is better than a broken user experience.
-    """
     if not llm_output or not llm_output.strip():
         return ValidationResult(safe=True, redacted_output=llm_output)
 
@@ -258,34 +229,3 @@ def validate_output(llm_output: str) -> ValidationResult:
         logger.error("Output validator error (FAIL OPEN): %s", exc)
         return ValidationResult(safe=True, redacted_output=llm_output)
 
-
-
-
-
-
-"""
-                User Query
-                     │
-                     ▼
-          check_input()
-         (Layer 1 Security)
-                     │
-                     ▼
-             Retriever
-                     │
-                     ▼
-         sanitize_context()
-         (Layer 2 Security)
-                     │
-                     ▼
-                 LLM
-                     │
-                     ▼
-          validate_output()
-         (Layer 3 Security)
-                     │
-                     ▼
-                 User
-
-
-"""
