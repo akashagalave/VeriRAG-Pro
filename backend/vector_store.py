@@ -18,13 +18,12 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# ── Constants
+
 
 EMBEDDING_DIM      = 1536
 DENSE_VECTOR_NAME  = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
-# ── Singletons
 
 base_embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
@@ -67,7 +66,6 @@ qdrant_client = QdrantClient(
 
 
 def get_collection_name(session_id: str) -> str:
-    """Map a session UUID to a Qdrant collection name (hyphens → underscores)."""
     return f"papeer_{session_id.replace('-', '_')}"
 
 
@@ -131,13 +129,6 @@ def get_vectorstore(session_id: str) -> QdrantVectorStore:
 
 
 def add_paper(docs: list[Document], session_id: str) -> None:
-    """
-    Embed and store document chunks in the session's Qdrant collection.
-
-    Note: Upstream Redis deduplication (redis_cache.is_document_indexed) prevents
-    this function being called for documents that are already indexed.
-    This function itself does not check Redis — that is api.py's responsibility.
-    """
     vs = get_vectorstore(session_id)
     vs.add_documents(docs)
     logger.info(
@@ -147,7 +138,6 @@ def add_paper(docs: list[Document], session_id: str) -> None:
 
 
 def list_papers(session_id: str) -> list[str]:
-    """Return a deduplicated list of document titles loaded into this session."""
     collection_name = get_collection_name(session_id)
     if not qdrant_client.collection_exists(collection_name):
         return []
@@ -175,10 +165,6 @@ def list_papers(session_id: str) -> list[str]:
 
 
 def search(query: str, session_id: str, k: int = 4) -> list[Document]:
-    """
-    Hybrid similarity search (BM25 + dense + RRF).
-    Retrieval latency is measured in rag_graph.py via metrics.measure_retrieval().
-    """
     return get_vectorstore(session_id).similarity_search(query, k=k)
 
 
