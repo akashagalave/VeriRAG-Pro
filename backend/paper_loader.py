@@ -72,7 +72,6 @@ def load_webpage(url: str) -> list[Document]:
 
 
 def _extract_arxiv_id(query: str) -> str | None:
-    """Return bare ArXiv ID (no version suffix) if one appears in the query."""
     m = _ARXIV_ID_RE.search(query)
     if m:
         return re.sub(r"v\d+$", "", m.group(1))
@@ -80,7 +79,6 @@ def _extract_arxiv_id(query: str) -> str | None:
 
 
 def _arxiv_api_lookup(arxiv_id: str) -> str:
-    """Fetch paper title by ID from the ArXiv Atom API."""
     url = f"https://export.arxiv.org/api/query?id_list={arxiv_id}"
     with urllib.request.urlopen(url, timeout=45) as resp:
         xml = resp.read().decode()
@@ -89,7 +87,6 @@ def _arxiv_api_lookup(arxiv_id: str) -> str:
 
 
 def _arxiv_search(query: str) -> str:
-    """Search ArXiv Atom API by title phrase and return the top result's bare paper ID."""
     phrase = query.strip('"')
     search_query = urllib.parse.quote(f'ti:"{phrase}"')
     url = f"https://export.arxiv.org/api/query?search_query={search_query}&max_results=1&sortBy=relevance"
@@ -102,7 +99,6 @@ def _arxiv_search(query: str) -> str:
 
 
 def _load_arxiv_by_id(arxiv_id: str) -> list[Document]:
-    """Download and chunk an ArXiv paper PDF by its bare ID."""
     pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
     with urllib.request.urlopen(pdf_url, timeout=60) as resp:
         pdf_bytes = resp.read()
@@ -127,7 +123,6 @@ def load_arxiv(query: str) -> list[Document]:
 
 
 def load_document(source: str) -> list[Document]:
-    """Dispatch to the appropriate loader based on URL prefix or file extension."""
     if source.startswith(("http://", "https://")):
         return load_webpage(source)
     ext = Path(source).suffix.lower()
@@ -140,32 +135,3 @@ def load_document(source: str) -> list[Document]:
     raise ValueError(f"Unsupported file type: {ext}")
 
 
-
-"""
-
-User Uploads File
-        ↓
-Frontend
-        ↓
-POST /upload
-        ↓
-Backend receives file
-        ↓
-load_document(source)
-        ↓
- ┌─────────────┬─────────────┬─────────────┬─────────────┐
- │   .pdf      │    .txt     │    .md      │   https://  │
- ▼             ▼             ▼             ▼
-load_pdf()  load_text()  load_markdown() load_webpage()
-        ↓
-Chunk Documents
-        ↓
-Embeddings
-        ↓
-Vector DB
-
-
-
-
-
-"""
