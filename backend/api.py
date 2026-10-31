@@ -322,8 +322,10 @@ async def ingest(
                     tmp.write(raw_bytes)
                     tmp_path = tmp.name
                 docs = await asyncio.to_thread(load_document, tmp_path)
+                original_title = Path(file.filename).stem
                 for doc in docs:
-                    doc.metadata.setdefault("title", Path(file.filename).stem)
+                    doc.metadata["title"] = original_title
+                    doc.metadata["source"] = file.filename
             finally:
                 if tmp_path:
                     Path(tmp_path).unlink(missing_ok=True)
